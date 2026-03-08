@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.finn581.parkfinder",
-      "buildNumber": "24",
+      "buildNumber": "22",
       "entitlements": {
         "com.apple.developer.applesignin": [
           "Default"
