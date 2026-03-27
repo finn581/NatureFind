@@ -3,47 +3,121 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NatureFind — Explore Every Park</title>
+<title>NatureFind — Every Outdoor Adventure. One App.</title>
+<meta name="description" content="NatureFind brings together national parks, hiking trails, golf courses, fishing spots, campgrounds, marinas, and mountain bike trails — all on one map with AI trip planning. $9.99 lifetime.">
+<meta name="keywords" content="national parks app, hiking trails, golf courses near me, fishing spots, campgrounds, outdoor app, trip planner, boating, mountain biking, nature app">
 <meta name="apple-itunes-app" content="app-id=6759922299">
+<meta property="og:title" content="NatureFind — Every Outdoor Adventure. One App.">
+<meta property="og:description" content="Parks, trails, golf, fishing, campgrounds, and AI trip planning. $9.99 lifetime — no subscriptions.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://finn581.github.io/NatureFind/">
+<link rel="canonical" href="https://finn581.github.io/NatureFind/">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a1f12;color:#fff;min-height:100vh}
-.hero{text-align:center;padding:80px 24px 40px}
-.hero h1{font-size:48px;font-weight:800;margin-bottom:8px}
-.hero p{font-size:20px;color:rgba(255,255,255,.6);max-width:500px;margin:0 auto}
-.badge{display:inline-block;background:#22c55e;color:#fff;padding:6px 18px;border-radius:20px;font-size:13px;font-weight:800;letter-spacing:2px;margin-bottom:20px}
-.features{max-width:600px;margin:0 auto;padding:0 24px 60px}
-.feature{display:flex;gap:16px;align-items:flex-start;margin-bottom:28px}
-.feature .emoji{font-size:32px;width:44px;text-align:center;flex-shrink:0}
-.feature h3{font-size:18px;font-weight:700;margin-bottom:2px}
-.feature p{font-size:14px;color:rgba(255,255,255,.5)}
-.cta{text-align:center;padding:0 24px 60px}
-.cta a{display:inline-block;background:#22c55e;color:#fff;padding:16px 40px;border-radius:14px;font-size:18px;font-weight:800;text-decoration:none}
+a{color:#22c55e}
+
+/* Hero */
+.hero{text-align:center;padding:80px 24px 48px;max-width:700px;margin:0 auto}
+.hero-badge{display:inline-block;background:#22c55e;color:#fff;padding:6px 18px;border-radius:20px;font-size:13px;font-weight:800;letter-spacing:2px;margin-bottom:24px}
+.hero h1{font-size:44px;font-weight:800;line-height:1.1;margin-bottom:16px}
+.hero h1 span{color:#22c55e}
+.hero p{font-size:18px;color:rgba(255,255,255,.6);line-height:1.6;max-width:520px;margin:0 auto}
+
+/* Price banner */
+.price-banner{text-align:center;padding:32px 24px;margin:0 auto;max-width:500px}
+.price-card{background:linear-gradient(135deg,rgba(34,197,94,.15),rgba(34,197,94,.05));border:2px solid #22c55e;border-radius:20px;padding:28px 24px;display:inline-block}
+.price-amount{font-size:48px;font-weight:800}
+.price-label{font-size:15px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+.price-note{font-size:14px;color:#22c55e;font-weight:700;margin-top:8px}
+.price-compare{font-size:13px;color:rgba(255,255,255,.35);margin-top:12px}
+
+/* Features grid */
+.features{max-width:800px;margin:0 auto;padding:48px 24px}
+.features h2{text-align:center;font-size:32px;font-weight:800;margin-bottom:8px}
+.features .subtitle{text-align:center;font-size:16px;color:rgba(255,255,255,.5);margin-bottom:40px}
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px}
+.feature-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:24px 20px}
+.feature-card .emoji{font-size:32px;margin-bottom:12px}
+.feature-card h3{font-size:17px;font-weight:700;margin-bottom:6px}
+.feature-card p{font-size:13px;color:rgba(255,255,255,.5);line-height:1.5}
+
+/* AI section */
+.ai-section{text-align:center;padding:60px 24px;max-width:600px;margin:0 auto}
+.ai-section h2{font-size:32px;font-weight:800;margin-bottom:12px}
+.ai-section p{font-size:16px;color:rgba(255,255,255,.5);line-height:1.6}
+.ai-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.3);padding:8px 16px;border-radius:12px;font-size:14px;font-weight:600;color:#a78bfa;margin-bottom:20px}
+
+/* CTA */
+.cta{text-align:center;padding:48px 24px 60px}
+.cta a{display:inline-block;background:#22c55e;color:#fff;padding:18px 48px;border-radius:14px;font-size:18px;font-weight:800;text-decoration:none;transition:background .2s}
 .cta a:hover{background:#16a34a}
-.footer{text-align:center;padding:40px 24px;border-top:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.3);font-size:13px}
+.cta p{margin-top:12px;font-size:13px;color:rgba(255,255,255,.35)}
+
+/* Social proof */
+.social{text-align:center;padding:40px 24px}
+.social p{font-size:14px;color:rgba(255,255,255,.4)}
+
+/* Footer */
+.footer{text-align:center;padding:40px 24px;border-top:1px solid rgba(255,255,255,.06);color:rgba(255,255,255,.3);font-size:13px}
 .footer a{color:rgba(255,255,255,.4);text-decoration:underline}
+
+@media(max-width:600px){
+.hero h1{font-size:32px}
+.price-amount{font-size:36px}
+.features h2,.ai-section h2{font-size:26px}
+.feature-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
+
 <div class="hero">
-<div class="badge">NATUREFIND</div>
-<h1>Explore Every Park</h1>
-<p>National parks, trails, campgrounds, and hidden gems — all on one stunning 3D satellite map.</p>
+<div class="hero-badge">NATUREFIND</div>
+<h1>Every Outdoor Adventure.<br><span>One App.</span></h1>
+<p>National parks, hiking trails, golf courses, fishing spots, campgrounds, marinas, and mountain bike trails — all on one interactive map with AI trip planning.</p>
 </div>
+
+<div class="price-banner">
+<div class="price-card">
+<div class="price-amount">$9.99</div>
+<div class="price-label">One-Time Purchase</div>
+<div class="price-note">Pay once. Keep forever. No subscriptions.</div>
+<div class="price-compare">Other outdoor apps charge $30-40/year. NatureFind is $9.99 for life.</div>
+</div>
+</div>
+
 <div class="features">
-<div class="feature"><div class="emoji">🌲</div><div><h3>400+ National Parks</h3><p>Browse parks with photos, reviews, and detailed info</p></div></div>
-<div class="feature"><div class="emoji">🥾</div><div><h3>Hiking Trails</h3><p>Full trail routes with difficulty ratings and elevation</p></div></div>
-<div class="feature"><div class="emoji">⛺</div><div><h3>Campgrounds</h3><p>Find campsites with amenities, fees, and contact info</p></div></div>
-<div class="feature"><div class="emoji">🏔️</div><div><h3>3D Satellite Terrain</h3><p>Real elevation data with satellite imagery and sky atmosphere</p></div></div>
-<div class="feature"><div class="emoji">💎</div><div><h3>Hidden Gems</h3><p>Viewpoints, waterfalls, peaks, springs, and picnic spots</p></div></div>
-<div class="feature"><div class="emoji">🦅</div><div><h3>Wildlife Sightings</h3><p>Share and discover wildlife spotted by the community</p></div></div>
+<h2>Everything You Need Outdoors</h2>
+<p class="subtitle">One app for every adventure — no switching between 5 different apps</p>
+<div class="feature-grid">
+<div class="feature-card"><div class="emoji">🌲</div><h3>400+ National Parks</h3><p>Weather, air quality, alerts, things to do, reviews, and real-time conditions</p></div>
+<div class="feature-card"><div class="emoji">🥾</div><h3>Hiking Trails</h3><p>Trail routes with difficulty ratings, elevation profiles, and surface info</p></div>
+<div class="feature-card"><div class="emoji">⛳</div><h3>Golf Courses</h3><p>Nearby courses with ratings, hours, reviews, and one-tap directions</p></div>
+<div class="feature-card"><div class="emoji">🎣</div><h3>Fishing Spots</h3><p>Find fishing locations, bait shops, and tackle stores near you</p></div>
+<div class="feature-card"><div class="emoji">🚤</div><h3>Boating & Marinas</h3><p>Marinas, boat rentals, and jet ski spots with reviews and contact info</p></div>
+<div class="feature-card"><div class="emoji">🚵</div><h3>Mountain Biking</h3><p>Bike trails and parks with ratings, photos, and directions</p></div>
+<div class="feature-card"><div class="emoji">⛺</div><h3>Campgrounds</h3><p>Campsites with amenities, photos, fees, and Recreation.gov reservation links</p></div>
+<div class="feature-card"><div class="emoji">🏔️</div><h3>3D Satellite Terrain</h3><p>Real elevation data with satellite imagery and atmospheric sky effects</p></div>
+<div class="feature-card"><div class="emoji">🦅</div><h3>Wildlife Sightings</h3><p>Community-reported sightings with photos, species, and confidence levels</p></div>
 </div>
+</div>
+
+<div class="ai-section">
+<div class="ai-badge">✨ AI-Powered</div>
+<h2>AI Trip Planner</h2>
+<p>Tell NatureFind where you're headed and what you're into. Get a complete day-by-day itinerary with real trail names, driving times, campground suggestions, and local tips — in seconds.</p>
+</div>
+
 <div class="cta">
 <a href="https://apps.apple.com/app/id6759922299">Download on the App Store</a>
+<p>Free to explore. Pro unlocks everything for $9.99.</p>
 </div>
+
 <div class="footer">
 <p>&copy; 2026 NatureFind. All rights reserved.</p>
-<p style="margin-top:12px"><a href="privacy.html">Privacy Policy</a> &middot; <a href="support.html">Support</a></p>
+<p style="margin-top:12px"><a href="privacy.html">Privacy Policy</a> &middot; <a href="terms.html">Terms of Service</a> &middot; <a href="support.html">Support</a></p>
 </div>
+
 </body>
 </html>
