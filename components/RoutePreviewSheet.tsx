@@ -22,6 +22,7 @@ interface Props {
   onClose: () => void;
   onNavigate: () => void;
   onViewDetails?: () => void;
+  onShare?: () => void;
 }
 
 export default function RoutePreviewSheet({
@@ -32,6 +33,7 @@ export default function RoutePreviewSheet({
   onClose,
   onNavigate,
   onViewDetails,
+  onShare,
 }: Props) {
   const slideAnim = useRef(new Animated.Value(SHEET_HEIGHT)).current;
 
@@ -62,6 +64,11 @@ export default function RoutePreviewSheet({
             {destinationName}
           </Text>
         </View>
+        {onShare && (
+          <Pressable onPress={onShare} style={styles.headerIcon} accessibilityLabel="Share park" accessibilityRole="button">
+            <Ionicons name="share-outline" size={20} color={Colors.textSecondary} />
+          </Pressable>
+        )}
         <Pressable onPress={onClose} accessibilityLabel="Close route preview" accessibilityRole="button">
           <Ionicons name="close" size={22} color={Colors.textSecondary} />
         </Pressable>
@@ -163,6 +170,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Montserrat-SemiBold",
     flex: 1,
+  },
+  headerIcon: {
+    padding: 4,
+    marginRight: 8,
   },
   loadingRow: {
     flexDirection: "row",

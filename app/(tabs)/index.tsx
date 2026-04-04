@@ -68,6 +68,7 @@ import {
 import { fetchRidbEnrichment, fetchRidbCampsites, type RidbFacility, type RidbCampsite } from "@/services/ridbApi";
 import LayerPanel, { type LayerGroup } from "@/components/LayerPanel";
 import RoutePreviewSheet from "@/components/RoutePreviewSheet";
+import { sharePark } from "@/utils/share";
 import {
   fetchDriveTimes,
   fetchRoute,
@@ -3179,6 +3180,19 @@ export default function MapTab() {
         onNavigate={() => setIsNavigating(true)}
         onViewDetails={
           routeTarget ? () => router.push(`/park/${routeTarget.parkCode}`) : undefined
+        }
+        onShare={
+          routeTarget
+            ? () => {
+                const park = visibleParks.find((p) => p.parkCode === routeTarget.parkCode);
+                sharePark({
+                  parkName: routeTarget.name,
+                  parkState: park?.states ?? "",
+                  parkCode: routeTarget.parkCode,
+                  description: park?.description,
+                });
+              }
+            : undefined
         }
       />
 

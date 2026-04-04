@@ -28,6 +28,7 @@ function generatePage(park) {
 
   return TEMPLATE
     .replace(/\{\{PARK_NAME\}\}/g, park.fullName)
+    .replace(/\{\{PARK_SLUG\}\}/g, slugify(park.fullName))
     .replace('{{PARK_DESIGNATION}}', park.designation || 'National Park')
     .replace('{{PARK_STATE}}', park.states)
     .replace('{{PARK_DESCRIPTION}}', park.description)

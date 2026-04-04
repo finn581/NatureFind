@@ -30,6 +30,7 @@ import {
   type VisitorCenter,
 } from "@/services/npsApi";
 import { isOpenNow, isDogFriendly } from "@/utils/parkUtils";
+import { sharePark } from "@/utils/share";
 import { useAuth } from "@/context/AuthContext";
 import { useFavorites } from "@/hooks/useFavorites";
 import {
@@ -436,6 +437,21 @@ export default function ParkDetailScreen() {
                 </View>
               )}
             </View>
+            <Pressable
+              onPress={() =>
+                sharePark({
+                  parkName: park.fullName,
+                  parkState: park.states,
+                  parkCode: park.parkCode,
+                  description: park.description,
+                })
+              }
+              style={styles.shareBtn}
+              accessibilityLabel={`Share ${park.fullName}`}
+              accessibilityRole="button"
+            >
+              <Ionicons name="share-outline" size={24} color={Colors.textSecondary} />
+            </Pressable>
             <Pressable
               onPress={toggleFavorite}
               style={styles.heartBtn}
@@ -1162,9 +1178,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
   },
-  heartBtn: {
+  shareBtn: {
     padding: 8,
     marginLeft: 8,
+  },
+  heartBtn: {
+    padding: 8,
   },
   directionsBtn: {
     flexDirection: "row",
