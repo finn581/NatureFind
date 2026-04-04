@@ -1,13 +1,18 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import "react-native-reanimated";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { AuthProvider } from "@/context/AuthContext";
+import { SubscriptionProvider } from "@/context/SubscriptionContext";
+import Paywall from "@/components/Paywall";
 import { Colors } from "@/constants/Colors";
+import { preloadParks } from "@/services/preloadService";
+import { trackSession } from "@/utils/reviewPrompt";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -39,14 +44,27 @@ export default function RootLayout() {
     ...FontAwesome.font,
   });
 
+  const router = useRouter();
+
   useEffect(() => {
     if (error) throw error;
   }, [error]);
 
   useEffect(() => {
-    if (loaded) {
+    if (!loaded) return;
+    // Prime park data cache ASAP — map tab reads synchronously on mount
+    preloadParks();
+    // Track session for review prompt
+    trackSession();
+    // Check onboarding before hiding splash
+    AsyncStorage.getItem("onboarding_done").then((val) => {
       SplashScreen.hideAsync();
-    }
+      if (!val) {
+        router.replace("/onboarding");
+      }
+    }).catch(() => {
+      SplashScreen.hideAsync();
+    });
   }, [loaded]);
 
   if (!loaded) {
@@ -55,29 +73,24 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <ThemeProvider value={parkTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="park/[id]"
-            options={{
-              headerShown: true,
-              headerTransparent: true,
-              headerTitle: "",
-              headerBackTitle: "Back",
-              headerTintColor: Colors.white,
-            }}
-          />
-          <Stack.Screen
-            name="activity/[name]"
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen
-            name="sighting/submit"
-            options={{ headerShown: false, presentation: "modal" }}
-          />
-        </Stack>
-      </ThemeProvider>
+      <SubscriptionProvider>
+        <ThemeProvider value={parkTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="onboarding"
+              options={{ headerShown: false, gestureEnabled: false, animation: "fade" }}
+            />
+            <Stack.Screen name="park/[id]" options={{ headerShown: false }} />
+            <Stack.Screen name="activity/[name]" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="sighting/submit"
+              options={{ headerShown: false, presentation: "modal" }}
+            />
+          </Stack>
+          <Paywall />
+        </ThemeProvider>
+      </SubscriptionProvider>
     </AuthProvider>
   );
 }

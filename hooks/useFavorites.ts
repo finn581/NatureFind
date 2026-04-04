@@ -6,9 +6,14 @@ import {
   type FavoriteDoc,
 } from "@/services/firebase";
 import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/context/SubscriptionContext";
+import { trackReviewAction } from "@/utils/reviewPrompt";
+
+const FREE_FAVORITES_LIMIT = 5;
 
 export function useFavorites() {
   const { user } = useAuth();
+  const { isPro, gateFeature } = useSubscription();
   const [favorites, setFavorites] = useState<FavoriteDoc[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -33,12 +38,19 @@ export function useFavorites() {
   }, [refresh]);
 
   const add = useCallback(
-    async (park: Omit<FavoriteDoc, "savedAt">) => {
-      if (!user) return;
+    async (park: Omit<FavoriteDoc, "savedAt">): Promise<boolean> => {
+      if (!user) return false;
+      // Check favorites limit for free users
+      if (!isPro && favorites.length >= FREE_FAVORITES_LIMIT) {
+        gateFeature("Unlock Unlimited Favorites");
+        return false;
+      }
       await addFavorite(user.uid, park);
       await refresh();
+      trackReviewAction();
+      return true;
     },
-    [user, refresh]
+    [user, refresh, isPro, favorites.length, gateFeature]
   );
 
   const remove = useCallback(
@@ -55,5 +67,7 @@ export function useFavorites() {
     [favorites]
   );
 
-  return { favorites, loading, refresh, add, remove, isFavorite };
+  const atLimit = !isPro && favorites.length >= FREE_FAVORITES_LIMIT;
+
+  return { favorites, loading, refresh, add, remove, isFavorite, atLimit, limit: FREE_FAVORITES_LIMIT };
 }
