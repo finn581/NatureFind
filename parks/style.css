@@ -1,0 +1,19 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, system-ui, sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.6; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid #2a2a3a; }
+.logo { color: #4ade80; font-weight: 700; font-size: 20px; text-decoration: none; }
+.cta-button { background: #4ade80; color: #000; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; }
+.cta-button.large { font-size: 18px; padding: 14px 32px; display: inline-block; margin: 16px 0; }
+main { max-width: 800px; margin: 0 auto; padding: 32px 24px; }
+h1 { font-size: 32px; color: #fff; margin-bottom: 8px; }
+.park-designation { color: #888; margin-bottom: 16px; }
+.park-description { margin-bottom: 32px; font-size: 17px; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 40px; }
+.info-card { background: #1a1a2e; border-radius: 12px; padding: 20px; }
+.info-card h3 { color: #4ade80; margin-bottom: 8px; }
+.info-card ul { list-style: none; }
+.info-card li { padding: 2px 0; }
+.app-cta { text-align: center; background: #1a1a2e; border-radius: 16px; padding: 40px 24px; margin: 40px 0; }
+.app-cta h2 { color: #fff; margin-bottom: 12px; }
+.pro-note { color: #888; font-size: 14px; margin-top: 8px; }
+footer { text-align: center; padding: 24px; color: #666; font-size: 13px; }
