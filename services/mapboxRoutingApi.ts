@@ -37,6 +37,17 @@ export interface MatchResult {
   geometry: { type: "LineString"; coordinates: [number, number][] };
 }
 
+// ─── Drive Time Cache ─────────────────────────────────────────────────────────
+
+const _dtCache = new Map<string, { times: (number | null)[]; ts: number }>();
+const DRIVE_TIME_TTL = 30 * 60 * 1000; // 30 min
+
+function _dtKey(origin: [number, number], dests: [number, number][]): string {
+  const o = `${origin[0].toFixed(2)},${origin[1].toFixed(2)}`;
+  const d = dests.map(([ln, lt]) => `${ln.toFixed(3)},${lt.toFixed(3)}`).join("|");
+  return `${o}:${d}`;
+}
+
 // ─── Matrix API ───────────────────────────────────────────────────────────────
 
 /**
@@ -51,8 +62,10 @@ export async function fetchDriveTimes(
 ): Promise<(number | null)[]> {
   if (!destinations.length) return [];
 
-  // Cap at 24 destinations (origin = 1 coord, max total = 25)
   const dests = destinations.slice(0, 24);
+  const cacheKey = _dtKey(origin, dests);
+  const cached = _dtCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < DRIVE_TIME_TTL) return cached.times;
 
   const coords = [origin, ...dests].map((c) => c.join(",")).join(";");
   const destIndices = dests.map((_, i) => i + 1).join(";");
@@ -65,8 +78,8 @@ export async function fetchDriveTimes(
   if (!res.ok) throw new Error(`Matrix API ${res.status}`);
   const json = await res.json();
 
-  // durations[0] is array from source 0 to each destination
   const row: (number | null)[] = json.durations?.[0] ?? [];
+  _dtCache.set(cacheKey, { times: row, ts: Date.now() });
   return row;
 }
 

@@ -18,7 +18,11 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "@/constants/Colors";
 import { US_STATES } from "@/constants/States";
-import { fetchParks, type Park } from "@/services/npsApi";
+import { fetchParks, fetchParksByActivity, type Park } from "@/services/npsApi";
+import { ACTIVITY_LIST } from "@/constants/Activities";
+import ActivityChips from "@/components/ActivityChips";
+import TeaserCard from "@/components/TeaserCard";
+import { getElevationProfile, type ElevationProfile } from "@/services/elevationApi";
 import {
   getRecentSightings,
   type SightingDoc,
@@ -27,11 +31,14 @@ import {
   type CampgroundContribution,
 } from "@/services/firebase";
 import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import {
   fetchTrails,
   fetchTrailPreviews,
+  fetchTrailDetail,
   type Trail,
   type TrailPreview,
+  type TrailDetail,
   DIFFICULTY_COLORS,
   DIFFICULTY_LABELS,
   TRAILS_ZOOM_THRESHOLD,
@@ -41,8 +48,24 @@ import {
   fetchCampgrounds,
   type Campground,
   CAMPGROUND_COLOR,
+  CAMPGROUNDS_ZOOM_THRESHOLD,
 } from "@/services/campgroundsApi";
 import { saveDraft, syncPendingDrafts } from "@/services/offlineDrafts";
+import {
+  fetchOsmParks,
+  type OsmPark,
+  type OsmParkType,
+  OSM_PARKS_ZOOM_THRESHOLD,
+} from "@/services/parksOverpassApi";
+import {
+  fetchOutdoorPois,
+  type OutdoorPoi,
+  type PoiCategory,
+  POI_ZOOM_THRESHOLD,
+  POI_COLORS,
+  POI_LABELS,
+} from "@/services/outdoorPoisApi";
+import { fetchRidbEnrichment, fetchRidbCampsites, type RidbFacility, type RidbCampsite } from "@/services/ridbApi";
 import LayerPanel, { type LayerGroup } from "@/components/LayerPanel";
 import RoutePreviewSheet from "@/components/RoutePreviewSheet";
 import {
@@ -52,11 +75,15 @@ import {
   formatDurationShort,
   type RouteResult,
 } from "@/services/mapboxRoutingApi";
+import { getPreloadedParks, OUTDOOR_DESIGNATIONS } from "@/services/preloadService";
 import MapboxGL from "@rnmapbox/maps";
 
 // ─── Mapbox init ─────────────────────────────────────────────────────────────
 
-MapboxGL.setAccessToken(process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? "");
+MapboxGL.setAccessToken(
+  process.env.EXPO_PUBLIC_MAPBOX_TOKEN ||
+    "pk.eyJ1IjoiZmlubnk2MTkiLCJhIjoiY21taTYzZHhxMDhpbzJxcTRxMDFuZW82aSJ9._JSEGDLmBGvl-7sB375Kbg"
+);
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 
@@ -125,8 +152,9 @@ function buildClusters(sightings: SightingDoc[], latDelta: number): ClusterPoint
     const lng = items.reduce((sum, s) => sum + s.location.longitude, 0) / items.length;
 
     const freq: Record<string, number> = {};
-    for (const s of items) freq[s.species.emoji] = (freq[s.species.emoji] || 0) + 1;
-    const emoji = Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+    for (const s of items) if (s.species?.emoji) freq[s.species.emoji] = (freq[s.species.emoji] || 0) + 1;
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    const emoji = sorted.length > 0 ? sorted[0][0] : "❓";
 
     return {
       id: `${lat.toFixed(5)}-${lng.toFixed(5)}`,
@@ -140,7 +168,12 @@ function buildClusters(sightings: SightingDoc[], latDelta: number): ClusterPoint
 }
 
 function timeAgo(ts: any): string {
-  const ms = typeof ts?.toMillis === "function" ? ts.toMillis() : Date.now();
+  let ms: number;
+  if (typeof ts?.toMillis === "function") ms = ts.toMillis();
+  else if (typeof ts?.seconds === "number") ms = ts.seconds * 1000;
+  else if (typeof ts === "number") ms = ts;
+  else if (ts instanceof Date) ms = ts.getTime();
+  else return "unknown";
   const diff = Date.now() - ms;
   if (diff < 60_000) return "just now";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
@@ -161,22 +194,6 @@ const STATE_NAME_TO_CODE: Record<string, string> = Object.fromEntries(
   US_STATES.map((s) => [s.name, s.code])
 );
 
-const OUTDOOR_DESIGNATIONS = new Set([
-  "National Park",
-  "National Forest",
-  "National Recreation Area",
-  "National Seashore",
-  "National Lakeshore",
-  "National Preserve",
-  "National Reserve",
-  "National River",
-  "National Scenic Trail",
-  "National Wildlife Refuge",
-  "National Grassland",
-  "National Wilderness Area",
-  "Wild and Scenic River",
-]);
-
 function thinCoords(
   coords: Array<{ latitude: number; longitude: number }>,
   maxPoints = 50
@@ -184,6 +201,15 @@ function thinCoords(
   if (coords.length <= maxPoints) return coords;
   const step = Math.ceil(coords.length / maxPoints);
   return coords.filter((_, i) => i % step === 0 || i === coords.length - 1);
+}
+
+function haversineDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function inViewport(lat: number, lon: number, region: Region, buffer = 0.6): boolean {
@@ -206,6 +232,7 @@ type CampEdits = {
 export default function MapTab() {
   const router = useRouter();
   const { user } = useAuth();
+  const { isPro, gateFeature } = useSubscription();
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
   const listBodyAnim = useRef(new Animated.Value(0)).current;
@@ -226,16 +253,23 @@ export default function MapTab() {
   const [locationDenied, setLocationDenied] = useState(false);
   const [showParks, setShowParks] = useState(true);
   const [showSightings, setShowSightings] = useState(true);
-  const [showTrails, setShowTrails] = useState(true);
-  const [showCampgrounds, setShowCampgrounds] = useState(true);
+  const [showTrails, setShowTrails] = useState(false);
+  const [showCampgrounds, setShowCampgrounds] = useState(false);
   const [dateFilter, setDateFilter] = useState<DateFilter>(30);
   const [selectedSighting, setSelectedSighting] = useState<SightingDoc | null>(null);
   const [selectedTrail, setSelectedTrail] = useState<Trail | null>(null);
   const [selectedTrailPreview, setSelectedTrailPreview] = useState<TrailPreview | null>(null);
+  const [trailDetailCache, setTrailDetailCache] = useState<Record<string, TrailDetail | null>>({});
+  const [trailDetailLoading, setTrailDetailLoading] = useState(false);
+  const [elevationCache, setElevationCache] = useState<Record<string, ElevationProfile | null>>({});
   const [selectedCampground, setSelectedCampground] = useState<Campground | null>(null);
   const [campContributions, setCampContributions] = useState<
     Record<string, CampgroundContribution | null>
   >({});
+  const [ridbCache, setRidbCache] = useState<Record<string, RidbFacility | null>>({});
+  const [ridbCampsites, setRidbCampsites] = useState<Record<string, RidbCampsite[]>>({});
+  const [campsiteFilter, setCampsiteFilter] = useState<"all"|"tent"|"electric"|"hookup"|"walkin"|"ada">("all");
+  const [campsitesExpanded, setCampsitesExpanded] = useState(false);
   const [campEditMode, setCampEditMode] = useState(false);
   const [campEdits, setCampEdits] = useState<CampEdits>({
     fee: null,
@@ -257,11 +291,47 @@ export default function MapTab() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeTarget, setRouteTarget] = useState<{ parkCode: string; name: string } | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [activeActivities, setActiveActivities] = useState<string[]>([]);
+  const [activityParks, setActivityParks] = useState<Park[]>([]);
+  const [osmParks, setOsmParks] = useState<OsmPark[]>([]);
+  const [showStateParks, setShowStateParks] = useState(true);
+  const [osmParksLoading, setOsmParksLoading] = useState(false);
+  const [selectedOsmPark, setSelectedOsmPark] = useState<OsmPark | null>(null);
+  const [outdoorPois, setOutdoorPois] = useState<OutdoorPoi[]>([]);
+  const [showDiscoverPois, setShowDiscoverPois] = useState(false);
+  const [poisLoading, setPoisLoading] = useState(false);
+  const [selectedPoi, setSelectedPoi] = useState<OutdoorPoi | null>(null);
+  const [show3D, setShow3D] = useState(false);
+  const [useSatellite, setUseSatellite] = useState(false);
+  // Auto-enable pro features when subscription activates, disable when it lapses
+  useEffect(() => {
+    if (isPro) {
+      setShowTrails(true);
+      setShowCampgrounds(true);
+      setShowDiscoverPois(true);
+      setShow3D(true);
+    } else {
+      setShowTrails(false);
+      setShowCampgrounds(false);
+      setShowDiscoverPois(false);
+      setShow3D(false);
+      setUseSatellite(false);
+    }
+  }, [isPro]);
+
+  const [mapReady, setMapReady] = useState(false);
+  const userStateCacheRef = useRef<string | undefined>(undefined);
   const trailFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const campFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewNonce = useRef(0);
+  const campNonce = useRef(0);
   const driveTimeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isochroneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const osmParksFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const osmParksNonce = useRef(0);
+  const poiFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const poiNonce = useRef(0);
 
   // ── Sync offline drafts on mount ─────────────────────────────────────────
 
@@ -275,6 +345,37 @@ export default function MapTab() {
     loadParks();
   }, []);
 
+  // ── Load activity-specific parks when filter changes ─────────────────────
+
+  useEffect(() => {
+    if (activeActivities.length === 0) {
+      setActivityParks([]);
+      return;
+    }
+    let cancelled = false;
+    const stateCode = userStateCacheRef.current;
+    const [uLon, uLat] = userLocation ?? [undefined, undefined];
+    Promise.allSettled(
+      activeActivities.map((name) => fetchParksByActivity(name, stateCode, uLat, uLon))
+    ).then((results) => {
+      if (cancelled) return;
+      const merged: Park[] = [];
+      const seen = new Set<string>();
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          for (const p of r.value) {
+            if (p.latitude && p.longitude && !seen.has(p.parkCode)) {
+              seen.add(p.parkCode);
+              merged.push(p);
+            }
+          }
+        }
+      }
+      setActivityParks(merged);
+    });
+    return () => { cancelled = true; };
+  }, [activeActivities]);
+
   // ── Location ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -285,33 +386,40 @@ export default function MapTab() {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
           });
-          setUserLocation([loc.coords.longitude, loc.coords.latitude]);
-          // Fly the Mapbox camera to user location
+          const lat = loc.coords.latitude;
+          const lon = loc.coords.longitude;
+
+          setUserLocation([lon, lat]);
+
+          // Fly the Mapbox camera to user location with 3D tilt
+          // (effects will fire trail/campground fetches once region state updates)
           cameraRef.current?.setCamera({
-            centerCoordinate: [loc.coords.longitude, loc.coords.latitude],
-            zoomLevel: 8,
-            animationDuration: 1200,
+            centerCoordinate: [lon, lat],
+            zoomLevel: 12,
+            pitch: 45,
+            animationDuration: 1800,
             animationMode: "flyTo",
           });
           // Keep region in sync for the Overpass debounce effects
           setRegion({
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            latitudeDelta: 5,
-            longitudeDelta: 5,
+            latitude: lat,
+            longitude: lon,
+            latitudeDelta: 1.0,
+            longitudeDelta: 1.0,
           });
           try {
             const [geo] = await Location.reverseGeocodeAsync({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
+              latitude: lat,
+              longitude: lon,
             });
             const stateCode = geo?.region ? STATE_NAME_TO_CODE[geo.region] : undefined;
-            loadParks(stateCode);
+            userStateCacheRef.current = stateCode;
+            if (stateCode) loadParks(stateCode);
           } catch {
-            loadParks();
+            // reverse geocode failed — initial loadParks() already ran
           }
         } catch {
-          loadParks();
+          // location failed — initial loadParks() already ran
         }
       } else {
         setLocationDenied(true);
@@ -320,10 +428,6 @@ export default function MapTab() {
   }, []);
 
   // ── Data loading ──────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (locationDenied) loadParks();
-  }, [locationDenied]);
 
   useEffect(() => {
     if (showSightings) loadSightings();
@@ -338,15 +442,16 @@ export default function MapTab() {
     previewFetchTimer.current = setTimeout(() => {
       if (
         region.latitudeDelta >= TRAILS_ZOOM_THRESHOLD &&
-        region.latitudeDelta < TRAILS_PREVIEW_MAX_ZOOM
+        region.latitudeDelta < TRAILS_PREVIEW_MAX_ZOOM &&
+        region.latitudeDelta < 15 // skip at continental zoom — wait for user location
       ) {
         loadTrailPreviews(region);
-      } else if (region.latitudeDelta < TRAILS_ZOOM_THRESHOLD) {
-        setTrailPreviews([]);
+      } else if (region.latitudeDelta >= TRAILS_PREVIEW_MAX_ZOOM || region.latitudeDelta >= 15) {
+        // Don't clear previews at continental zoom — keep any that were already loaded
       } else {
         setTrailPreviews([]);
       }
-    }, 600);
+    }, 250);
     return () => {
       if (previewFetchTimer.current) clearTimeout(previewFetchTimer.current);
     };
@@ -359,25 +464,53 @@ export default function MapTab() {
       if (region.latitudeDelta < TRAILS_ZOOM_THRESHOLD) {
         loadTrails(region);
       }
-    }, 800);
+    }, 350);
     return () => {
       if (trailFetchTimer.current) clearTimeout(trailFetchTimer.current);
     };
   }, [showTrails, region]);
 
   useEffect(() => {
-    if (!showCampgrounds) {
+    if (!showCampgrounds || region.latitudeDelta >= CAMPGROUNDS_ZOOM_THRESHOLD) {
       setCampgrounds([]);
       return;
     }
     if (campFetchTimer.current) clearTimeout(campFetchTimer.current);
     campFetchTimer.current = setTimeout(() => {
       loadCampgrounds(region);
-    }, 700);
+    }, 300);
     return () => {
       if (campFetchTimer.current) clearTimeout(campFetchTimer.current);
     };
   }, [showCampgrounds, region]);
+
+  useEffect(() => {
+    if (!showStateParks || region.latitudeDelta >= OSM_PARKS_ZOOM_THRESHOLD) {
+      setOsmParks([]);
+      return;
+    }
+    if (osmParksFetchTimer.current) clearTimeout(osmParksFetchTimer.current);
+    osmParksFetchTimer.current = setTimeout(() => {
+      loadOsmParks(region);
+    }, 400);
+    return () => {
+      if (osmParksFetchTimer.current) clearTimeout(osmParksFetchTimer.current);
+    };
+  }, [showStateParks, region]);
+
+  useEffect(() => {
+    if (!showDiscoverPois || region.latitudeDelta >= POI_ZOOM_THRESHOLD) {
+      setOutdoorPois([]);
+      return;
+    }
+    if (poiFetchTimer.current) clearTimeout(poiFetchTimer.current);
+    poiFetchTimer.current = setTimeout(() => {
+      loadPois(region);
+    }, 350);
+    return () => {
+      if (poiFetchTimer.current) clearTimeout(poiFetchTimer.current);
+    };
+  }, [showDiscoverPois, region]);
 
   // ── Matrix API: drive time badges for visible parks ───────────────────────
 
@@ -400,7 +533,7 @@ export default function MapTab() {
       } catch {
         // non-fatal
       }
-    }, 1500);
+    }, 600);
     return () => {
       if (driveTimeTimer.current) clearTimeout(driveTimeTimer.current);
     };
@@ -428,19 +561,37 @@ export default function MapTab() {
   }, [showIsochrone, userLocation, isochroneMinutes]);
 
   async function loadParks(stateCode?: string) {
+    // Use preloaded data for initial national view (no state filter)
+    if (!stateCode) {
+      const preloaded = getPreloadedParks();
+      if (preloaded && preloaded.length > 0) {
+        setParks(preloaded);
+        setLoading(false);
+        setMapReady(true);
+        return;
+      }
+    }
     setLoading(true);
     setError(false);
     try {
-      const res = await fetchParks({ limit: 100, stateCode });
-      setParks(
-        res.data.filter(
-          (p) => p.latitude && p.longitude && OUTDOOR_DESIGNATIONS.has(p.designation)
-        )
+      const PAGE = 500;
+      const first = await fetchParks({ limit: PAGE, start: 0, stateCode });
+      let allParks = first.data;
+      const total = parseInt(first.total, 10);
+      if (!stateCode && total > PAGE) {
+        const second = await fetchParks({ limit: PAGE, start: PAGE, stateCode });
+        allParks = [...allParks, ...second.data];
+      }
+      const filtered = allParks.filter(
+        (p) => p.latitude && p.longitude && OUTDOOR_DESIGNATIONS.has(p.designation)
       );
+      setParks(filtered);
+      if (!mapReady) setMapReady(true);
     } catch {
       setError(true);
     } finally {
       setLoading(false);
+      if (!mapReady) setMapReady(true);
     }
   }
 
@@ -457,6 +608,7 @@ export default function MapTab() {
   }, [dateFilter]);
 
   async function loadTrailPreviews(r: Region) {
+    const myNonce = ++previewNonce.current;
     setTrailPreviewsLoading(true);
     try {
       const half_lat = r.latitudeDelta / 2;
@@ -467,11 +619,16 @@ export default function MapTab() {
         r.latitude + half_lat,
         r.longitude + half_lng
       );
-      setTrailPreviews(data);
+      // Only update state if this is still the latest request (prevents stale overwrites)
+      if (myNonce === previewNonce.current) {
+        setTrailPreviews(data);
+      }
     } catch {
       // non-fatal
     } finally {
-      setTrailPreviewsLoading(false);
+      if (myNonce === previewNonce.current) {
+        setTrailPreviewsLoading(false);
+      }
     }
   }
 
@@ -497,17 +654,68 @@ export default function MapTab() {
   useEffect(() => {
     if (!selectedCampground) {
       setCampEditMode(false);
+      setCampsitesExpanded(false);
+      setCampsiteFilter("all");
       return;
     }
-    if (selectedCampground.id in campContributions) return;
-    getCampgroundContribution(selectedCampground.id)
-      .then((data) => {
-        setCampContributions((prev) => ({ ...prev, [selectedCampground.id]: data }));
-      })
-      .catch(() => {});
+    if (!(selectedCampground.id in campContributions)) {
+      getCampgroundContribution(selectedCampground.id)
+        .then((data) => {
+          setCampContributions((prev) => ({ ...prev, [selectedCampground.id]: data }));
+        })
+        .catch(() => {});
+    }
+    if (!(selectedCampground.id in ridbCache)) {
+      fetchRidbEnrichment(
+        selectedCampground.name,
+        selectedCampground.latitude,
+        selectedCampground.longitude,
+      ).then((data) => {
+        setRidbCache((prev) => ({ ...prev, [selectedCampground.id]: data }));
+        // Once we have a facility ID, pre-fetch campsites in background
+        if (data?.facilityId && !(selectedCampground.id in ridbCampsites)) {
+          fetchRidbCampsites(data.facilityId).then((sites) => {
+            setRidbCampsites((prev) => ({ ...prev, [selectedCampground.id]: sites }));
+          });
+        }
+      });
+    }
   }, [selectedCampground]);
 
+  // ── Fetch trail detail when a preview pin is tapped ─────────────────────
+  useEffect(() => {
+    if (!selectedTrailPreview) return;
+    const id = selectedTrailPreview.id;
+    if (id in trailDetailCache) return; // already fetched
+    setTrailDetailLoading(true);
+    fetchTrailDetail(id)
+      .then((detail) => {
+        setTrailDetailCache((prev) => ({ ...prev, [id]: detail }));
+        // Fetch elevation for Pro users
+        if (isPro && detail && detail.coordinates.length >= 2 && !(id in elevationCache)) {
+          getElevationProfile(String(id), detail.coordinates)
+            .then((profile) => setElevationCache((prev) => ({ ...prev, [String(id)]: profile })))
+            .catch(() => {});
+        }
+      })
+      .catch(() => {
+        setTrailDetailCache((prev) => ({ ...prev, [id]: null }));
+      })
+      .finally(() => setTrailDetailLoading(false));
+  }, [selectedTrailPreview]);
+
+  // Also fetch elevation for directly-selected trails (from polyline tap)
+  useEffect(() => {
+    if (!selectedTrail || !isPro) return;
+    const id = String(selectedTrail.id ?? selectedTrail.name);
+    if (id in elevationCache || selectedTrail.coordinates.length < 2) return;
+    getElevationProfile(id, selectedTrail.coordinates)
+      .then((profile) => setElevationCache((prev) => ({ ...prev, [id]: profile })))
+      .catch(() => {});
+  }, [selectedTrail, isPro]);
+
   async function loadCampgrounds(r: Region) {
+    const myNonce = ++campNonce.current;
     setCampgroundsLoading(true);
     try {
       const half_lat = r.latitudeDelta / 2;
@@ -518,11 +726,59 @@ export default function MapTab() {
         r.latitude + half_lat,
         r.longitude + half_lng
       );
-      setCampgrounds(data);
+      if (myNonce === campNonce.current) {
+        setCampgrounds(data);
+      }
     } catch {
       // non-fatal
     } finally {
-      setCampgroundsLoading(false);
+      if (myNonce === campNonce.current) {
+        setCampgroundsLoading(false);
+      }
+    }
+  }
+
+  async function loadPois(r: Region) {
+    const myNonce = ++poiNonce.current;
+    setPoisLoading(true);
+    try {
+      const half_lat = r.latitudeDelta / 2;
+      const half_lng = r.longitudeDelta / 2;
+      const data = await fetchOutdoorPois(
+        r.latitude - half_lat,
+        r.longitude - half_lng,
+        r.latitude + half_lat,
+        r.longitude + half_lng,
+      );
+      if (myNonce === poiNonce.current) setOutdoorPois(data);
+    } catch {
+      // non-fatal
+    } finally {
+      if (myNonce === poiNonce.current) setPoisLoading(false);
+    }
+  }
+
+  async function loadOsmParks(r: Region) {
+    const myNonce = ++osmParksNonce.current;
+    setOsmParksLoading(true);
+    try {
+      const half_lat = r.latitudeDelta / 2;
+      const half_lng = r.longitudeDelta / 2;
+      const data = await fetchOsmParks(
+        r.latitude - half_lat,
+        r.longitude - half_lng,
+        r.latitude + half_lat,
+        r.longitude + half_lng,
+      );
+      if (myNonce === osmParksNonce.current) {
+        setOsmParks(data);
+      }
+    } catch {
+      // non-fatal
+    } finally {
+      if (myNonce === osmParksNonce.current) {
+        setOsmParksLoading(false);
+      }
     }
   }
 
@@ -535,8 +791,47 @@ export default function MapTab() {
 
   const visibleParks = useMemo(() => {
     if (!showParks) return [];
-    return parks.filter((p) => p.latitude && p.longitude);
-  }, [parks, showParks]);
+
+    // Merge base parks + activity-specific parks (deduplicated)
+    const allParks = activeActivities.length > 0
+      ? (() => {
+          const seen = new Set(parks.map((p) => p.parkCode));
+          return [...parks, ...activityParks.filter((p) => !seen.has(p.parkCode))];
+        })()
+      : parks;
+
+    // Activity filter: only parks that offer at least one selected activity
+    const filtered = activeActivities.length === 0
+      ? allParks.filter((p) => p.latitude && p.longitude)
+      : allParks.filter(
+          (p) =>
+            p.latitude &&
+            p.longitude &&
+            activeActivities.some((act) =>
+              p.activities.some((a) => a.name.toLowerCase().includes(act.toLowerCase()))
+            )
+        );
+
+    return filtered
+      .map((p) => ({
+        park: p,
+        dist: haversineDeg(
+          region.latitude, region.longitude,
+          parseFloat(p.latitude), parseFloat(p.longitude)
+        ),
+      }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 25)
+      .map(({ park }) => park);
+  }, [parks, activityParks, activeActivities, showParks, region.latitude, region.longitude]);
+
+  // Park marker accent color — follows the single selected activity's color
+  const parkMarkerColor = useMemo(() => {
+    if (activeActivities.length === 1) {
+      return ACTIVITY_LIST.find((a) => a.name === activeActivities[0])?.accentColor ?? Colors.primary;
+    }
+    return Colors.primary;
+  }, [activeActivities]);
 
   const visibleTrailPreviews = useMemo(() => {
     if (!showTrails) return [];
@@ -552,6 +847,30 @@ export default function MapTab() {
       .slice(0, 40);
   }, [campgrounds, region, showCampgrounds]);
 
+  const visibleOsmParks = useMemo(() => {
+    if (!showStateParks) return [];
+    // Filter to viewport and deduplicate against NPS parks (fuzzy name match within 5km)
+    const npsNames = new Set(parks.map((p) => p.fullName.toLowerCase()));
+    return osmParks
+      .filter((p) => inViewport(p.latitude, p.longitude, region))
+      .filter((p) => {
+        const nameLower = p.name.toLowerCase();
+        // Skip if name closely matches an NPS park name
+        for (const npsName of npsNames) {
+          if (npsName.includes(nameLower) || nameLower.includes(npsName)) return false;
+        }
+        return true;
+      })
+      .slice(0, 60);
+  }, [osmParks, parks, region, showStateParks]);
+
+  const visiblePois = useMemo(() => {
+    if (!showDiscoverPois) return [];
+    return outdoorPois
+      .filter((p) => inViewport(p.latitude, p.longitude, region))
+      .slice(0, 80);
+  }, [outdoorPois, region, showDiscoverPois]);
+
   const heatmapPoints = useMemo(() => {
     if (!showSightings || region.latitudeDelta >= HEATMAP_SHOW_THRESHOLD) return [];
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
@@ -564,30 +883,6 @@ export default function MapTab() {
 
   // ── GeoJSON feature collections for Mapbox layers ────────────────────────
 
-  const parksGeoJSON = useMemo<GeoJSONFC>(
-    () => ({
-      type: "FeatureCollection",
-      features: visibleParks.map((p) => {
-        const dt = driveTimes[p.parkCode];
-        return {
-          type: "Feature",
-          id: p.id,
-          geometry: {
-            type: "Point",
-            coordinates: [parseFloat(p.longitude), parseFloat(p.latitude)],
-          },
-          properties: {
-            id: p.id,
-            name: p.name,
-            parkCode: p.parkCode,
-            designation: p.designation,
-            driveTimeLabel: dt != null ? formatDurationShort(dt) : "",
-          },
-        };
-      }),
-    }),
-    [visibleParks, driveTimes]
-  );
 
   const trailPreviewsGeoJSON = useMemo<GeoJSONFC>(() => {
     const seen = new Set<string>();
@@ -598,11 +893,11 @@ export default function MapTab() {
     });
     return {
       type: "FeatureCollection",
-      features: deduped.map((p) => ({
+      features: deduped.map((p, idx) => ({
         type: "Feature",
-        id: p.id,
+        id: idx,
         geometry: { type: "Point", coordinates: [p.longitude, p.latitude] },
-        properties: { id: p.id, name: p.name, difficulty: p.difficulty, color: p.color },
+        properties: { id: String(p.id), name: p.name, difficulty: p.difficulty, color: p.color },
       })),
     };
   }, [visibleTrailPreviews]);
@@ -634,13 +929,13 @@ export default function MapTab() {
     return {
       type: "FeatureCollection",
       features: [...byName.values()]
-        .slice(0, 12)
-        .map((trail) => {
+        .slice(0, 50)
+        .map((trail, idx) => {
           const mid = trail.coordinates[Math.floor(trail.coordinates.length / 2)];
           if (!mid) return null;
           return {
             type: "Feature",
-            id: `label-${trail.id}`,
+            id: idx,
             geometry: { type: "Point", coordinates: [mid.longitude, mid.latitude] },
             properties: { id: trail.id, name: trail.name, color: trail.color },
           };
@@ -649,31 +944,17 @@ export default function MapTab() {
     };
   }, [trails]);
 
-  const campgroundsGeoJSON = useMemo<GeoJSONFC>(
-    () => ({
-      type: "FeatureCollection",
-      features: visibleCampgrounds.map((c) => ({
-        type: "Feature",
-        id: c.id,
-        geometry: { type: "Point", coordinates: [c.longitude, c.latitude] },
-        properties: { id: c.id, name: c.name },
-      })),
-    }),
-    [visibleCampgrounds]
-  );
 
   const clustersGeoJSON = useMemo<GeoJSONFC>(
     () => ({
       type: "FeatureCollection",
-      features: clusters.map((c) => ({
+      features: clusters.map((c, idx) => ({
         type: "Feature",
-        id: c.id,
+        id: idx,
         geometry: { type: "Point", coordinates: [c.lng, c.lat] },
         properties: {
-          id: c.id,
+          idx,
           count: c.count,
-          emoji: c.emoji,
-          label: c.count === 1 ? c.emoji : `${c.emoji} ${c.count}`,
         },
       })),
     }),
@@ -695,6 +976,145 @@ export default function MapTab() {
     }),
     [heatmapPoints]
   );
+
+  // ── GeoJSON for native pin layers ─────────────────────────────────────────
+
+  const parksGeoJSON = useMemo<GeoJSONFC>(() => ({
+    type: "FeatureCollection",
+    features: visibleParks.map((p, idx) => {
+      const dt = driveTimes[p.parkCode];
+      return {
+        type: "Feature",
+        id: idx,
+        geometry: {
+          type: "Point",
+          coordinates: [parseFloat(p.longitude), parseFloat(p.latitude)],
+        },
+        properties: {
+          parkCode: p.parkCode,
+          name: p.name,
+          fullName: p.fullName,
+          color: parkMarkerColor,
+          driveTime: dt != null ? formatDurationShort(dt) : "",
+        },
+      };
+    }),
+  }), [visibleParks, driveTimes, parkMarkerColor]);
+
+  const campgroundsGeoJSON = useMemo<GeoJSONFC>(() => ({
+    type: "FeatureCollection",
+    features: visibleCampgrounds.map((c, idx) => ({
+      type: "Feature",
+      id: idx,
+      geometry: {
+        type: "Point",
+        coordinates: [c.longitude, c.latitude],
+      },
+      properties: {
+        id: c.id,
+        name: c.name,
+        color: CAMPGROUND_COLOR,
+      },
+    })),
+  }), [visibleCampgrounds]);
+
+  const osmParksGeoJSON = useMemo<GeoJSONFC>(() => ({
+    type: "FeatureCollection",
+    features: visibleOsmParks.map((p, idx) => ({
+      type: "Feature",
+      id: idx,
+      geometry: { type: "Point", coordinates: [p.longitude, p.latitude] },
+      properties: {
+        id: p.id,
+        name: p.name,
+        parkType: p.parkType,
+        color: p.color,
+      },
+    })),
+  }), [visibleOsmParks]);
+
+  // ── Native GL layer press handlers ─────────────────────────────────────
+
+  const handleParkPress = useCallback((e: any) => {
+    const props = e.features?.[0]?.properties;
+    if (!props?.parkCode) return;
+    if (userLocation) {
+      const park = visibleParks.find((p) => p.parkCode === props.parkCode);
+      if (!park) return;
+      setRouteTarget({ parkCode: park.parkCode, name: park.fullName });
+      setActiveRoute(null);
+      setRouteLoading(true);
+      fetchRoute(userLocation, [parseFloat(park.longitude), parseFloat(park.latitude)])
+        .then((route) => setActiveRoute(route))
+        .catch(() => setActiveRoute(null))
+        .finally(() => setRouteLoading(false));
+    } else {
+      router.push(`/park/${props.parkCode}`);
+    }
+  }, [userLocation, visibleParks]);
+
+  const handleCampPress = useCallback((e: any) => {
+    const id = e.features?.[0]?.properties?.id;
+    if (!id) return;
+    const camp = campgrounds.find((c) => c.id === String(id));
+    if (camp) setSelectedCampground(camp);
+  }, [campgrounds]);
+
+  const handleTrailPreviewPress = useCallback((e: any) => {
+    const id = e.features?.[0]?.properties?.id;
+    if (!id) return;
+    const preview = trailPreviews.find((p) => p.id === String(id));
+    if (preview) setSelectedTrailPreview(preview);
+  }, [trailPreviews]);
+
+  const handleTrailLabelPress = useCallback((e: any) => {
+    const id = e.features?.[0]?.properties?.id;
+    if (!id) return;
+    const trail = trails.find((t) => t.id === String(id));
+    if (trail) setSelectedTrail(trail);
+  }, [trails]);
+
+  const handleClusterPress = useCallback((e: any) => {
+    const props = e.features?.[0]?.properties;
+    if (!props) return;
+    const idx = props.idx;
+    const cluster = clusters[idx];
+    if (!cluster) return;
+    if (cluster.count === 1) {
+      setSelectedSighting(cluster.items[0]);
+    } else {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [cluster.lng, cluster.lat],
+        zoomLevel: currentZoom + 2.5,
+        animationDuration: 350,
+        animationMode: "flyTo",
+      });
+    }
+  }, [clusters, currentZoom]);
+
+  const handleOsmParkPress = useCallback((e: any) => {
+    const id = e.features?.[0]?.properties?.id;
+    if (!id) return;
+    const park = osmParks.find((p) => p.id === String(id));
+    if (park) setSelectedOsmPark(park);
+  }, [osmParks]);
+
+  const poisGeoJSON = useMemo<GeoJSONFC>(() => ({
+    type: "FeatureCollection",
+    features: visiblePois.map((p, idx) => ({
+      type: "Feature",
+      id: idx,
+      geometry: { type: "Point", coordinates: [p.longitude, p.latitude] },
+      properties: { id: p.id, name: p.name, category: p.category, color: p.color, icon: ({ viewpoint: "marker-viewpoint", waterfall: "marker-waterfall", peak: "marker-peak", picnic: "marker-picnic", spring: "marker-spring" } as Record<string, string>)[p.category] ?? "marker-viewpoint" },
+    })),
+  }), [visiblePois]);
+
+  const handlePoiPress = useCallback((e: any) => {
+    const id = e.features?.[0]?.properties?.id;
+    if (!id) return;
+    const poi = outdoorPois.find((p) => p.id === String(id));
+    if (poi) setSelectedPoi(poi);
+  }, [outdoorPois]);
 
   // ── List panel animation ──────────────────────────────────────────────────
 
@@ -749,10 +1169,15 @@ export default function MapTab() {
       )}
 
       {/* ── Mapbox Map ── */}
-      <MapboxGL.MapView
+      {!mapReady && (
+        <View style={[styles.map, { alignItems: "center", justifyContent: "center" }]}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      )}
+      {mapReady && <MapboxGL.MapView
         ref={mapRef}
         style={styles.map}
-        styleURL="mapbox://styles/mapbox/outdoors-v12"
+        styleURL={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/outdoors-v12"}
         logoEnabled={false}
         attributionEnabled={false}
         compassEnabled
@@ -765,7 +1190,8 @@ export default function MapTab() {
           if (!ne || !sw) return;
           const [east, north] = ne;
           const [west, south] = sw;
-          setCurrentZoom(props.zoom ?? currentZoom);
+          const zoom = props.zoom ?? currentZoom;
+          setCurrentZoom(zoom);
           setRegion({
             latitude: lat,
             longitude: lon,
@@ -777,8 +1203,11 @@ export default function MapTab() {
         <MapboxGL.Camera
           ref={cameraRef}
           defaultSettings={{
-            centerCoordinate: [US_CENTER.longitude, US_CENTER.latitude],
-            zoomLevel: 4,
+            centerCoordinate: userLocation
+              ? userLocation
+              : [US_CENTER.longitude, US_CENTER.latitude],
+            zoomLevel: userLocation ? 12 : 4,
+            pitch: userLocation && show3D ? 45 : 0,
           }}
           followUserLocation={isNavigating}
           followUserMode={isNavigating ? MapboxGL.UserTrackingMode.FollowWithCourse : undefined}
@@ -787,6 +1216,45 @@ export default function MapTab() {
         />
 
         <MapboxGL.UserLocation visible animated />
+
+        {/* ── Custom marker images ── */}
+        <MapboxGL.Images
+          images={{
+            "marker-park": require("../../assets/markers/marker-park.png"),
+            "marker-state-park": require("../../assets/markers/marker-state-park.png"),
+            "marker-camp": require("../../assets/markers/marker-camp.png"),
+            "marker-trail": require("../../assets/markers/marker-trail.png"),
+            "marker-trail-label": require("../../assets/markers/marker-trail-label.png"),
+            "marker-viewpoint": require("../../assets/markers/marker-viewpoint.png"),
+            "marker-waterfall": require("../../assets/markers/marker-waterfall.png"),
+            "marker-peak": require("../../assets/markers/marker-peak.png"),
+            "marker-picnic": require("../../assets/markers/marker-picnic.png"),
+            "marker-spring": require("../../assets/markers/marker-spring.png"),
+            "marker-sighting": require("../../assets/markers/marker-sighting.png"),
+          }}
+        />
+
+        {/* ── 3D Terrain + Sky atmosphere ── */}
+        {show3D && (
+          <MapboxGL.RasterDemSource
+            id="mapbox-dem"
+            url="mapbox://mapbox.mapbox-terrain-dem-v1"
+            tileSize={514}
+            maxZoomLevel={14}
+          >
+            <MapboxGL.Terrain style={{ exaggeration: 1.5 }} />
+          </MapboxGL.RasterDemSource>
+        )}
+        {show3D && (
+          <MapboxGL.SkyLayer
+            id="sky-layer"
+            style={{
+              skyType: "atmosphere",
+              skyAtmosphereSun: [0.0, 90.0],
+              skyAtmosphereSunIntensity: 15,
+            }}
+          />
+        )}
 
         {/* ── Heatmap (sightings density) ── */}
         {showSightings && heatmapPoints.length > 0 && (
@@ -828,212 +1296,26 @@ export default function MapTab() {
               if (trail) setSelectedTrail(trail);
             }}
           >
+            {/* Dark casing for contrast against any basemap */}
             <MapboxGL.LineLayer
-              id="trail-lines"
+              id="trail-casing"
               style={{
-                lineColor: ["get", "color"],
-                lineWidth: 3,
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
-          </MapboxGL.ShapeSource>
-        )}
-
-        {/* ── Trail name labels at midpoint (zoomed in) ── */}
-        {showTrails && trails.length > 0 && region.latitudeDelta < TRAILS_ZOOM_THRESHOLD && (
-          <MapboxGL.ShapeSource
-            id="trail-labels-src"
-            shape={trailLabelsGeoJSON}
-            onPress={(e: any) => {
-              const f = e.features?.[0];
-              if (!f) return;
-              const trail = trails.find((t) => String(t.id) === String(f.properties?.id));
-              if (trail) setSelectedTrail(trail);
-            }}
-          >
-            <MapboxGL.CircleLayer
-              id="trail-label-dots"
-              style={{
-                circleRadius: 7,
-                circleColor: ["get", "color"],
-                circleStrokeWidth: 2,
-                circleStrokeColor: "#fff",
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="trail-label-text"
-              style={{
-                textField: ["get", "name"],
-                textSize: 11,
-                textAnchor: "top",
-                textOffset: [0, 1.2],
-                textColor: "#fff",
-                textHaloColor: "#111",
-                textHaloWidth: 1.5,
-                textAllowOverlap: false,
-                textOptional: true,
-              }}
-            />
-          </MapboxGL.ShapeSource>
-        )}
-
-        {/* ── Trail preview pins (zoomed out) ── */}
-        {showTrails &&
-          region.latitudeDelta >= TRAILS_ZOOM_THRESHOLD &&
-          region.latitudeDelta < TRAILS_PREVIEW_MAX_ZOOM &&
-          trailPreviews.length > 0 && (
-            <MapboxGL.ShapeSource
-              id="trail-previews-src"
-              shape={trailPreviewsGeoJSON}
-              onPress={(e: any) => {
-                const f = e.features?.[0];
-                if (!f) return;
-                const preview = trailPreviews.find((p) => p.id === f.properties?.id);
-                if (preview) setSelectedTrailPreview(preview);
-              }}
-            >
-              <MapboxGL.CircleLayer
-                id="trail-preview-circles"
-                style={{
-                  circleRadius: 10,
-                  circleColor: ["get", "color"],
-                  circleStrokeWidth: 2.5,
-                  circleStrokeColor: "#fff",
-                }}
-              />
-              <MapboxGL.SymbolLayer
-                id="trail-preview-icons"
-                style={{
-                  textField: "🥾",
-                  textSize: 11,
-                  textAllowOverlap: true,
-                  textAnchor: "center",
-                }}
-              />
-              <MapboxGL.SymbolLayer
-                id="trail-preview-labels"
-                style={{
-                  textField: ["get", "name"],
-                  textSize: 10,
-                  textAnchor: "top",
-                  textOffset: [0, 1.5],
-                  textColor: "#fff",
-                  textHaloColor: "#111",
-                  textHaloWidth: 1.5,
-                  textAllowOverlap: false,
-                  textOptional: true,
-                }}
-              />
-            </MapboxGL.ShapeSource>
-          )}
-
-        {/* ── National Park pins ── */}
-        {showParks && visibleParks.length > 0 && (
-          <MapboxGL.ShapeSource
-            id="parks-src"
-            shape={parksGeoJSON}
-            onPress={async (e: any) => {
-              const f = e.features?.[0];
-              if (!f) return;
-              const { parkCode, name } = f.properties ?? {};
-              if (!parkCode) return;
-              const park = visibleParks.find((p) => p.parkCode === parkCode);
-              if (!park) return;
-              if (userLocation) {
-                setRouteTarget({ parkCode, name: park.fullName });
-                setActiveRoute(null);
-                setRouteLoading(true);
-                try {
-                  const route = await fetchRoute(userLocation, [
-                    parseFloat(park.longitude),
-                    parseFloat(park.latitude),
-                  ]);
-                  setActiveRoute(route);
-                } catch {
-                  setActiveRoute(null);
-                } finally {
-                  setRouteLoading(false);
-                }
-              } else {
-                router.push(`/park/${parkCode}`);
-              }
-            }}
-          >
-            <MapboxGL.CircleLayer
-              id="park-circles"
-              style={{
-                circleRadius: 13,
-                circleColor: Colors.primary,
-                circleStrokeWidth: 2.5,
-                circleStrokeColor: "#fff",
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="park-icons"
-              style={{
-                textField: "🌲",
-                textSize: 14,
-                textAllowOverlap: true,
-                textAnchor: "center",
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="park-labels"
-              style={{
-                textField: ["get", "name"],
-                textSize: 11,
-                textAnchor: "top",
-                textOffset: [0, 1.6],
-                textColor: "#fff",
-                textHaloColor: "#1a3a2a",
-                textHaloWidth: 2,
-                textAllowOverlap: false,
-                textOptional: true,
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="park-drive-times"
-              style={{
-                textField: ["get", "driveTimeLabel"],
-                textSize: 9,
-                textAnchor: "bottom",
-                textOffset: [0, -1.8],
-                textColor: "#fff",
-                textHaloColor: "#1a3a2a",
-                textHaloWidth: 1.5,
-                textAllowOverlap: false,
-                textOptional: true,
-              }}
-            />
-          </MapboxGL.ShapeSource>
-        )}
-
-        {/* ── Active route polyline ── */}
-        {activeRoute && (
-          <MapboxGL.ShapeSource
-            id="route-src"
-            shape={activeRoute.geometry}
-          >
-            <MapboxGL.LineLayer
-              id="route-casing"
-              style={{
-                lineColor: "#fff",
+                lineColor: "rgba(0,0,0,0.55)",
                 lineWidth: 7,
                 lineCap: "round",
                 lineJoin: "round",
               }}
-              belowLayerID="park-circles"
             />
+            {/* Colored trail on top */}
             <MapboxGL.LineLayer
-              id="route-line"
+              id="trail-lines"
+              aboveLayerID="trail-casing"
               style={{
-                lineColor: Colors.primary,
+                lineColor: ["get", "color"],
                 lineWidth: 4,
                 lineCap: "round",
                 lineJoin: "round",
               }}
-              belowLayerID="park-circles"
             />
           </MapboxGL.ShapeSource>
         )}
@@ -1059,105 +1341,102 @@ export default function MapTab() {
           </MapboxGL.ShapeSource>
         )}
 
-        {/* ── Campground pins ── */}
+        {/* ── Active route polyline ── */}
+        {activeRoute && (
+          <MapboxGL.ShapeSource id="route-src" shape={activeRoute.geometry}>
+            <MapboxGL.LineLayer
+              id="route-casing"
+              style={{
+                lineColor: "#fff",
+                lineWidth: 7,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+            <MapboxGL.LineLayer
+              id="route-line"
+              aboveLayerID="route-casing"
+              style={{
+                lineColor: Colors.primary,
+                lineWidth: 4,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── Discovery POIs — viewpoints, waterfalls, peaks (native GL) ── */}
+        {showDiscoverPois && visiblePois.length > 0 && (
+          <MapboxGL.ShapeSource id="poi-src" shape={poisGeoJSON} onPress={handlePoiPress}>
+            <MapboxGL.SymbolLayer id="poi-label" style={{ iconImage: ["get", "icon"], iconSize: 0.22, iconAllowOverlap: true, textField: ["get", "name"], textSize: 10, textOffset: [0, 1.8], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.65)", textHaloWidth: 1.2, textMaxWidth: 7, textOptional: true, textFont: ["DIN Pro Medium"] }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── OSM state/county/regional park pins (native GL) ── */}
+        {showStateParks && visibleOsmParks.length > 0 && (
+          <MapboxGL.ShapeSource id="osm-parks-src" shape={osmParksGeoJSON} onPress={handleOsmParkPress}>
+            <MapboxGL.SymbolLayer id="osm-park-label" style={{ iconImage: "marker-state-park", iconSize: 0.2, iconAllowOverlap: true, textField: ["get", "name"], textSize: 10, textOffset: [0, 1.8], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.65)", textHaloWidth: 1.2, textMaxWidth: 8, textOptional: true, textFont: ["DIN Pro Medium"] }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── Campground pins (native GL) ── */}
         {showCampgrounds && visibleCampgrounds.length > 0 && (
-          <MapboxGL.ShapeSource
-            id="camps-src"
-            shape={campgroundsGeoJSON}
-            onPress={(e: any) => {
-              const f = e.features?.[0];
-              if (!f) return;
-              const camp = campgrounds.find((c) => c.id === f.properties?.id);
-              if (camp) setSelectedCampground(camp);
-            }}
-          >
-            <MapboxGL.CircleLayer
-              id="camp-circles"
-              style={{
-                circleRadius: 12,
-                circleColor: CAMPGROUND_COLOR,
-                circleStrokeWidth: 2.5,
-                circleStrokeColor: "#fff",
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="camp-icons"
-              style={{
-                textField: "⛺",
-                textSize: 12,
-                textAllowOverlap: true,
-                textAnchor: "center",
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="camp-labels"
-              style={{
-                textField: ["get", "name"],
-                textSize: 10,
-                textAnchor: "top",
-                textOffset: [0, 1.5],
-                textColor: "#fff",
-                textHaloColor: "#111",
-                textHaloWidth: 1.5,
-                textAllowOverlap: false,
-                textOptional: true,
-              }}
-            />
+          <MapboxGL.ShapeSource id="camp-src" shape={campgroundsGeoJSON} onPress={handleCampPress}>
+            <MapboxGL.SymbolLayer id="camp-label" style={{ iconImage: "marker-camp", iconSize: 0.2, iconAllowOverlap: true, textField: ["get", "name"], textSize: 10, textOffset: [0, 1.8], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.65)", textHaloWidth: 1.2, textMaxWidth: 7, textOptional: true, textFont: ["DIN Pro Medium"] }} />
           </MapboxGL.ShapeSource>
         )}
 
-        {/* ── Wildlife sighting clusters ── */}
+        {/* ── Trail preview pins (native GL) ── */}
+        {showTrails && region.latitudeDelta >= TRAILS_ZOOM_THRESHOLD && region.latitudeDelta < TRAILS_PREVIEW_MAX_ZOOM && visibleTrailPreviews.length > 0 && (
+          <MapboxGL.ShapeSource id="tp-src" shape={trailPreviewsGeoJSON} onPress={handleTrailPreviewPress}>
+            <MapboxGL.SymbolLayer id="tp-label" style={{ iconImage: "marker-trail", iconSize: 0.2, iconAllowOverlap: true, textField: ["get", "name"], textSize: 10, textOffset: [0, 1.8], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.6)", textHaloWidth: 1.2, textMaxWidth: 7, textOptional: true, textFont: ["DIN Pro Medium"] }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── Trail label pins (native GL) ── */}
+        {showTrails && trails.length > 0 && region.latitudeDelta < TRAILS_ZOOM_THRESHOLD && (
+          <MapboxGL.ShapeSource id="tl-src" shape={trailLabelsGeoJSON} onPress={handleTrailLabelPress}>
+            <MapboxGL.SymbolLayer id="tl-name" style={{ iconImage: "marker-trail-label", iconSize: 0.18, iconAllowOverlap: true, textField: ["get", "name"], textSize: 12, textFont: ["DIN Pro Bold"], textOffset: [0, 1.6], textColor: ["get", "color"], textHaloColor: "rgba(0,0,0,0.75)", textHaloWidth: 1.5 }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── National Park pins (native GL — largest, always on top) ── */}
+        {showParks && visibleParks.length > 0 && (
+          <MapboxGL.ShapeSource id="parks-src" shape={parksGeoJSON} onPress={handleParkPress}>
+            <MapboxGL.SymbolLayer id="park-label" style={{ iconImage: "marker-park", iconSize: 0.25, iconAllowOverlap: true, textAllowOverlap: true, textField: ["get", "name"], textSize: 11, textOffset: [0, 2.0], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.7)", textHaloWidth: 1.5, textMaxWidth: 8, textFont: ["DIN Pro Medium"] }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── Sighting cluster pins (native GL) ── */}
         {showSightings && clusters.length > 0 && (
-          <MapboxGL.ShapeSource
-            id="clusters-src"
-            shape={clustersGeoJSON}
-            onPress={(e: any) => {
-              const f = e.features?.[0];
-              if (!f) return;
-              const cluster = clusters.find((c) => c.id === f.properties?.id);
-              if (!cluster) return;
-              if (cluster.count === 1) {
-                setSelectedSighting(cluster.items[0]);
-              } else {
-                cameraRef.current?.setCamera({
-                  centerCoordinate: [cluster.lng, cluster.lat],
-                  zoomLevel: currentZoom + 2.5,
-                  animationDuration: 350,
-                  animationMode: "flyTo",
-                });
-              }
-            }}
-          >
-            <MapboxGL.CircleLayer
-              id="cluster-circles"
-              style={{
-                circleRadius: ["case", [">", ["get", "count"], 1], 18, 13],
-                circleColor: "#7c3aed",
-                circleStrokeWidth: 2.5,
-                circleStrokeColor: "#fff",
-                circleOpacity: 0.9,
-              }}
-            />
-            <MapboxGL.SymbolLayer
-              id="cluster-labels"
-              style={{
-                textField: ["get", "label"],
-                textSize: 13,
-                textColor: "#fff",
-                textAllowOverlap: true,
-                textAnchor: "center",
-              }}
-            />
+          <MapboxGL.ShapeSource id="cluster-src" shape={clustersGeoJSON} onPress={handleClusterPress}>
+            <MapboxGL.SymbolLayer id="cl-icon" filter={["==", ["get", "count"], 1]} style={{ iconImage: "marker-sighting", iconSize: 0.2, iconAllowOverlap: true }} />
+            <MapboxGL.CircleLayer id="cl-halo" filter={[">", ["get", "count"], 1]} style={{ circleRadius: ["interpolate", ["linear"], ["get", "count"], 2, 12, 5, 14, 20, 18], circleColor: "#fff" }} />
+            <MapboxGL.CircleLayer id="cl-dot" filter={[">", ["get", "count"], 1]} style={{ circleRadius: ["interpolate", ["linear"], ["get", "count"], 2, 10, 5, 12, 20, 16], circleColor: "#7c3aed" }} />
+            <MapboxGL.SymbolLayer id="cl-count" filter={[">", ["get", "count"], 1]} style={{ textField: ["to-string", ["get", "count"]], textSize: 12, textColor: "#fff", textFont: ["DIN Pro Bold"], textAllowOverlap: true }} />
           </MapboxGL.ShapeSource>
         )}
 
-      </MapboxGL.MapView>
+      </MapboxGL.MapView>}
+
+
+      {/* ── DEBUG overlay (remove before build) ── */}
 
       {/* ── Layer Panel ── */}
       {(() => {
-        const activeCount = [showParks, showTrails, showCampgrounds, showSightings, showIsochrone].filter(
-          Boolean
-        ).length;
+        const activeCount = [
+          showParks,
+          showStateParks,
+          showTrails,
+          showCampgrounds,
+          showDiscoverPois,
+          show3D,
+          useSatellite,
+          showSightings,
+          showIsochrone,
+          activeActivities.length > 0,
+        ].filter(Boolean).length;
 
         const trailZoomStatus = showTrails
           ? region.latitudeDelta >= TRAILS_PREVIEW_MAX_ZOOM
@@ -1168,13 +1447,27 @@ export default function MapTab() {
           : undefined;
 
         const campZoomStatus = showCampgrounds
-          ? campgrounds.length > 0
+          ? region.latitudeDelta >= CAMPGROUNDS_ZOOM_THRESHOLD
+            ? "Zoom in to see campgrounds"
+            : campgroundsLoading
+            ? "Loading campgrounds..."
+            : campgrounds.length > 0
             ? `${campgrounds.length} campgrounds nearby`
-            : "Loading campgrounds..."
+            : "No campgrounds found nearby"
           : undefined;
 
         const sightingsZoomStatus = showSightings
           ? `${sightings.length} sighting${sightings.length !== 1 ? "s" : ""}`
+          : undefined;
+
+        const osmParksZoomStatus = showStateParks
+          ? region.latitudeDelta >= OSM_PARKS_ZOOM_THRESHOLD
+            ? "Zoom in to see state & local parks"
+            : osmParksLoading
+            ? "Loading parks..."
+            : osmParks.length > 0
+            ? `${visibleOsmParks.length} parks nearby`
+            : "No state/local parks found nearby"
           : undefined;
 
         const dateFilterExtra = (
@@ -1247,8 +1540,19 @@ export default function MapTab() {
                 description: "Named trails & footpaths",
                 color: "#f59e0b",
                 active: showTrails,
-                onToggle: () => setShowTrails((v) => !v),
+                onToggle: () => { if (gateFeature("Unlock Trail Routes")) return; setShowTrails((v) => !v); },
                 zoomStatus: trailZoomStatus,
+                isPro: !isPro,
+              },
+              {
+                key: "stateParks",
+                emoji: "🌳",
+                name: "State & Local Parks",
+                description: "State, county & regional parks",
+                color: "#059669",
+                active: showStateParks,
+                onToggle: () => setShowStateParks((v) => !v),
+                zoomStatus: osmParksZoomStatus,
               },
               {
                 key: "campgrounds",
@@ -1257,8 +1561,69 @@ export default function MapTab() {
                 description: "Camp sites & RV parks",
                 color: CAMPGROUND_COLOR,
                 active: showCampgrounds,
-                onToggle: () => setShowCampgrounds((v) => !v),
+                onToggle: () => { if (gateFeature("Unlock Campground Details")) return; setShowCampgrounds((v) => !v); },
                 zoomStatus: campZoomStatus,
+                isPro: !isPro,
+              },
+            ],
+          },
+          {
+            title: "Discovery",
+            layers: [
+              {
+                key: "discoverPois",
+                emoji: "🔭",
+                name: "Points of Interest",
+                description: "Viewpoints, waterfalls, peaks & more",
+                color: "#8b5cf6",
+                active: showDiscoverPois,
+                onToggle: () => { if (gateFeature("Unlock Hidden Gems")) return; setShowDiscoverPois((v) => !v); },
+                isPro: !isPro,
+                zoomStatus: showDiscoverPois
+                  ? region.latitudeDelta >= POI_ZOOM_THRESHOLD
+                    ? "Zoom in to discover POIs"
+                    : poisLoading
+                    ? "Searching for POIs..."
+                    : visiblePois.length > 0
+                    ? `${visiblePois.length} discoveries nearby`
+                    : "No POIs found nearby"
+                  : undefined,
+              },
+              {
+                key: "terrain3d",
+                emoji: "🏔️",
+                name: "3D Terrain",
+                description: "Elevation, hills & sky atmosphere",
+                color: "#ea580c",
+                active: show3D,
+                isPro: !isPro,
+                onToggle: () => {
+                  if (gateFeature("Unlock 3D Terrain")) return;
+                  setShow3D((v) => !v);
+                  if (!show3D) {
+                    cameraRef.current?.setCamera({
+                      pitch: 50,
+                      animationDuration: 600,
+                      animationMode: "flyTo",
+                    });
+                  } else {
+                    cameraRef.current?.setCamera({
+                      pitch: 0,
+                      animationDuration: 600,
+                      animationMode: "flyTo",
+                    });
+                  }
+                },
+              },
+              {
+                key: "satellite",
+                emoji: "🛰️",
+                name: "Satellite Imagery",
+                description: "Live satellite basemap with labels",
+                color: "#1e40af",
+                active: useSatellite,
+                onToggle: () => { if (gateFeature("Unlock Satellite Imagery")) return; setUseSatellite((v) => !v); },
+                isPro: !isPro,
               },
             ],
           },
@@ -1290,13 +1655,39 @@ export default function MapTab() {
                   : "Enable location to use",
                 color: "#0ea5e9",
                 active: showIsochrone,
-                onToggle: () => setShowIsochrone((v) => !v),
+                onToggle: () => { if (gateFeature("Unlock Drive Time Zones")) return; setShowIsochrone((v) => !v); },
+                isPro: !isPro,
                 zoomStatus: showIsochrone
                   ? isochroneGeoJSON
                     ? `${isochroneMinutes}‑min drive zone active`
                     : "Calculating…"
                   : undefined,
                 extra: isochroneExtra,
+              },
+            ],
+          },
+          {
+            title: "Activity Filter",
+            layers: [
+              {
+                key: "activities",
+                emoji: "🎯",
+                name: "Filter by Activity",
+                description: "Tap a chip to filter parks",
+                color: "#10b981",
+                active: activeActivities.length > 0,
+                onToggle: () => setActiveActivities([]),
+                alwaysShowExtra: true,
+                zoomStatus:
+                  activeActivities.length > 0
+                    ? `${visibleParks.length} park${visibleParks.length !== 1 ? "s" : ""} · ${activeActivities.join(", ")}`
+                    : undefined,
+                extra: (
+                  <ActivityChips
+                    selected={activeActivities}
+                    onChange={setActiveActivities}
+                  />
+                ),
               },
             ],
           },
@@ -1312,6 +1703,31 @@ export default function MapTab() {
           />
         );
       })()}
+
+      {/* ── 3D terrain toggle ── */}
+      <Pressable
+        style={[styles.threeDBtn, show3D && styles.threeDActive]}
+        onPress={() => {
+          setShow3D((v) => !v);
+          if (!show3D) {
+            cameraRef.current?.setCamera({
+              pitch: 50,
+              animationDuration: 600,
+              animationMode: "flyTo",
+            });
+          } else {
+            cameraRef.current?.setCamera({
+              pitch: 0,
+              animationDuration: 600,
+              animationMode: "flyTo",
+            });
+          }
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={show3D ? "Disable 3D terrain" : "Enable 3D terrain"}
+      >
+        <Text style={[styles.threeDText, show3D && styles.threeDTextActive]}>3D</Text>
+      </Pressable>
 
       {/* ── Status badges ── */}
       {showTrails && region.latitudeDelta >= TRAILS_PREVIEW_MAX_ZOOM && (
@@ -1485,93 +1901,176 @@ export default function MapTab() {
                 </Pressable>
               </View>
 
-              <View style={styles.sheetActionRow}>
-                <Pressable
-                  style={[styles.directionsBtn, { borderColor: selectedTrail.color }]}
-                  onPress={() => {
-                    const mid =
-                      selectedTrail.coordinates[
-                        Math.floor(selectedTrail.coordinates.length / 2)
-                      ];
-                    if (mid) openDirections(mid.latitude, mid.longitude, selectedTrail.name);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Get directions"
-                >
-                  <Ionicons name="navigate-outline" size={15} color={selectedTrail.color} />
-                  <Text style={[styles.directionsBtnText, { color: selectedTrail.color }]}>
-                    Directions
-                  </Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.trailDetails}>
-                <View style={styles.trailDetailItem}>
-                  <Ionicons name="layers-outline" size={16} color={Colors.textSecondary} />
-                  <View>
-                    <Text style={styles.trailDetailLabel}>Surface</Text>
-                    <Text style={styles.trailDetailValue}>{selectedTrail.surface}</Text>
-                  </View>
-                </View>
-                <View style={styles.trailDetailItem}>
-                  <Ionicons
-                    name={
-                      selectedTrail.dogFriendly === true
-                        ? "checkmark-circle"
-                        : selectedTrail.dogFriendly === false
-                        ? "close-circle"
-                        : "help-circle-outline"
-                    }
-                    size={16}
-                    color={
-                      selectedTrail.dogFriendly === true
-                        ? Colors.primaryLight
-                        : selectedTrail.dogFriendly === false
-                        ? Colors.error
-                        : Colors.textSecondary
-                    }
-                  />
-                  <View>
-                    <Text style={styles.trailDetailLabel}>Dogs</Text>
-                    <Text style={styles.trailDetailValue}>
-                      {selectedTrail.dogFriendly === true
-                        ? "Allowed"
-                        : selectedTrail.dogFriendly === false
-                        ? "Not allowed"
-                        : "Unknown"}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.trailDetailItem}>
-                  <Ionicons
-                    name={selectedTrail.fee === true ? "cash-outline" : "gift-outline"}
-                    size={16}
-                    color={Colors.textSecondary}
-                  />
-                  <View>
-                    <Text style={styles.trailDetailLabel}>Fee</Text>
-                    <Text style={styles.trailDetailValue}>
-                      {selectedTrail.fee === true
-                        ? "Required"
-                        : selectedTrail.fee === false
-                        ? "Free"
-                        : "Unknown"}
-                    </Text>
-                  </View>
-                </View>
-                {selectedTrail.access && (
-                  <View style={styles.trailDetailItem}>
-                    <Ionicons name="lock-open-outline" size={16} color={Colors.textSecondary} />
-                    <View>
-                      <Text style={styles.trailDetailLabel}>Access</Text>
-                      <Text style={styles.trailDetailValue}>
-                        {selectedTrail.access.charAt(0).toUpperCase() +
-                          selectedTrail.access.slice(1)}
+              {isPro ? (
+                <>
+                  <View style={styles.sheetActionRow}>
+                    <Pressable
+                      style={[styles.directionsBtn, { borderColor: selectedTrail.color }]}
+                      onPress={() => {
+                        const mid =
+                          selectedTrail.coordinates[
+                            Math.floor(selectedTrail.coordinates.length / 2)
+                          ];
+                        if (mid) openDirections(mid.latitude, mid.longitude, selectedTrail.name);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Get directions"
+                    >
+                      <Ionicons name="navigate-outline" size={15} color={selectedTrail.color} />
+                      <Text style={[styles.directionsBtnText, { color: selectedTrail.color }]}>
+                        Directions
                       </Text>
-                    </View>
+                    </Pressable>
                   </View>
-                )}
-              </View>
+
+                  <View style={styles.trailDetails}>
+                    {selectedTrail.distanceMiles != null && (
+                      <View style={styles.trailDetailItem}>
+                        <Ionicons name="resize-outline" size={16} color={Colors.textSecondary} />
+                        <View>
+                          <Text style={styles.trailDetailLabel}>Distance</Text>
+                          <Text style={styles.trailDetailValue}>
+                            {selectedTrail.distanceMiles} mi
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    <View style={styles.trailDetailItem}>
+                      <Ionicons name="layers-outline" size={16} color={Colors.textSecondary} />
+                      <View>
+                        <Text style={styles.trailDetailLabel}>Surface</Text>
+                        <Text style={styles.trailDetailValue}>{selectedTrail.surface}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.trailDetailItem}>
+                      <Ionicons
+                        name={
+                          selectedTrail.dogFriendly === true
+                            ? "checkmark-circle"
+                            : selectedTrail.dogFriendly === false
+                            ? "close-circle"
+                            : "help-circle-outline"
+                        }
+                        size={16}
+                        color={
+                          selectedTrail.dogFriendly === true
+                            ? Colors.primaryLight
+                            : selectedTrail.dogFriendly === false
+                            ? Colors.error
+                            : Colors.textSecondary
+                        }
+                      />
+                      <View>
+                        <Text style={styles.trailDetailLabel}>Dogs</Text>
+                        <Text style={styles.trailDetailValue}>
+                          {selectedTrail.dogFriendly === true
+                            ? "Allowed"
+                            : selectedTrail.dogFriendly === false
+                            ? "Not allowed"
+                            : "Unknown"}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.trailDetailItem}>
+                      <Ionicons
+                        name={selectedTrail.fee === true ? "cash-outline" : "gift-outline"}
+                        size={16}
+                        color={Colors.textSecondary}
+                      />
+                      <View>
+                        <Text style={styles.trailDetailLabel}>Fee</Text>
+                        <Text style={styles.trailDetailValue}>
+                          {selectedTrail.fee === true
+                            ? "Required"
+                            : selectedTrail.fee === false
+                            ? "Free"
+                            : "Unknown"}
+                        </Text>
+                      </View>
+                    </View>
+                    {selectedTrail.access && (
+                      <View style={styles.trailDetailItem}>
+                        <Ionicons name="lock-open-outline" size={16} color={Colors.textSecondary} />
+                        <View>
+                          <Text style={styles.trailDetailLabel}>Access</Text>
+                          <Text style={styles.trailDetailValue}>
+                            {selectedTrail.access.charAt(0).toUpperCase() +
+                              selectedTrail.access.slice(1)}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Elevation Profile */}
+                  {(() => {
+                    const trailKey = String(selectedTrail.id ?? selectedTrail.name);
+                    const elev = elevationCache[trailKey];
+                    if (!elev) return null;
+                    const range = elev.maxElevation - elev.minElevation || 1;
+                    return (
+                      <View style={styles.elevationWrap}>
+                        <Text style={styles.elevationTitle}>Elevation Profile</Text>
+                        <View style={styles.elevationStats}>
+                          <View style={styles.elevationStat}>
+                            <Ionicons name="arrow-up" size={12} color="#22c55e" />
+                            <Text style={styles.elevationStatText}>{elev.totalGain} ft gain</Text>
+                          </View>
+                          <View style={styles.elevationStat}>
+                            <Ionicons name="arrow-down" size={12} color="#ef4444" />
+                            <Text style={styles.elevationStatText}>{elev.totalLoss} ft loss</Text>
+                          </View>
+                          <View style={styles.elevationStat}>
+                            <Ionicons name="trending-up" size={12} color={Colors.textSecondary} />
+                            <Text style={styles.elevationStatText}>
+                              {elev.minElevation}–{elev.maxElevation} ft
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.elevationChart}>
+                          {elev.points.map((p, i) => {
+                            const height = ((p.elevation - elev.minElevation) / range) * 60 + 4;
+                            return (
+                              <View
+                                key={i}
+                                style={{
+                                  flex: 1,
+                                  justifyContent: "flex-end",
+                                  alignItems: "center",
+                                }}
+                              >
+                                <View
+                                  style={{
+                                    width: "80%",
+                                    height,
+                                    backgroundColor: selectedTrail.color + "88",
+                                    borderTopLeftRadius: 2,
+                                    borderTopRightRadius: 2,
+                                  }}
+                                />
+                              </View>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    );
+                  })()}
+                </>
+              ) : (
+                <TeaserCard
+                  title="Full Trail Details"
+                  emoji="🥾"
+                  accentColor={selectedTrail.color}
+                  statLine={selectedTrail.distanceMiles != null ? `${selectedTrail.distanceMiles} mi · ${DIFFICULTY_LABELS[selectedTrail.difficulty]}` : undefined}
+                  bullets={[
+                    "Route drawn on map",
+                    "Elevation profile with gain/loss",
+                    "Surface type & dog-friendly status",
+                    "Directions to trailhead",
+                  ]}
+                  paywallContext="Unlock Trail Details"
+                />
+              )}
             </ScrollView>
           </View>
         </View>
@@ -1581,21 +2080,35 @@ export default function MapTab() {
       {selectedCampground &&
         (() => {
           const contrib = campContributions[selectedCampground.id];
+          const ridb = ridbCache[selectedCampground.id]; // undefined=loading, null=not found
+          // Priority: community contribution > RIDB > OSM
+          function pickField(
+            contribVal: boolean | null | undefined,
+            ridbVal: boolean | null | undefined,
+            osmVal: boolean | null,
+          ): boolean | null {
+            if (contribVal !== undefined && contribVal !== null) return contribVal;
+            if (ridbVal != null) return ridbVal;
+            return osmVal;
+          }
           const merged = {
-            fee: contrib?.fee !== undefined ? contrib.fee : selectedCampground.fee,
-            showers:
-              contrib?.showers !== undefined ? contrib.showers : selectedCampground.showers,
-            toilets:
-              contrib?.toilets !== undefined ? contrib.toilets : selectedCampground.toilets,
-            tents: contrib?.tents !== undefined ? contrib.tents : selectedCampground.tents,
-            caravans:
-              contrib?.caravans !== undefined ? contrib.caravans : selectedCampground.caravans,
+            fee: pickField(contrib?.fee, ridb?.fee, selectedCampground.fee),
+            showers: pickField(contrib?.showers, ridb?.showers, selectedCampground.showers),
+            toilets: pickField(contrib?.toilets, ridb?.toilets, selectedCampground.toilets),
+            tents: pickField(contrib?.tents, ridb?.tents, selectedCampground.tents),
+            caravans: pickField(contrib?.caravans, ridb?.caravans, selectedCampground.caravans),
           };
           const hasGaps = Object.values(merged).some((v) => v === null);
           const communityFields = new Set(
             Object.keys(contrib ?? {}).filter((k) =>
               ["fee", "showers", "toilets", "tents", "caravans"].includes(k)
             )
+          );
+          const ridbFields = new Set(
+            (["fee", "showers", "toilets", "tents", "caravans"] as const).filter((k) => {
+              if (communityFields.has(k)) return false;
+              return ridb?.[k] != null;
+            })
           );
 
           const editFields: { field: keyof CampEdits; label: string; icon: string }[] = [
@@ -1773,6 +2286,45 @@ export default function MapTab() {
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.sheetScrollContent}
                   >
+                    {!isPro ? (
+                      <TeaserCard
+                        title="Campground Details"
+                        emoji="⛺"
+                        accentColor={CAMPGROUND_COLOR}
+                        statLine={ridb ? `${ridb.campsiteCount || "?"} campsites` : undefined}
+                        bullets={[
+                          "Amenities & facilities",
+                          "Individual campsite list",
+                          "Photos & descriptions",
+                          "Reserve on Recreation.gov",
+                        ]}
+                        paywallContext="Unlock Campground Details"
+                      />
+                    ) : (
+                    <>
+                    {/* ── Photo carousel ── */}
+                    {ridb?.photos && ridb.photos.length > 0 && (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.photoCarouselRow}
+                        style={styles.photoCarousel}
+                      >
+                        {[...ridb.photos].sort((a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0))
+                          .slice(0, 8)
+                          .map((photo, i) => (
+                          <Image
+                            key={i}
+                            source={{ uri: photo.url }}
+                            style={[
+                              styles.photoThumb,
+                              i === 0 && styles.photoThumbFirst,
+                            ]}
+                            contentFit="cover"
+                          />
+                        ))}
+                      </ScrollView>
+                    )}
                     <View style={styles.trailDetails}>
                       {(
                         [
@@ -1848,6 +2400,9 @@ export default function MapTab() {
                             {communityFields.has(key) && (
                               <Text style={styles.communityTag}>community</Text>
                             )}
+                            {ridbFields.has(key as any) && (
+                              <Text style={styles.ridbTag}>recreation.gov</Text>
+                            )}
                           </View>
                         </View>
                       ))}
@@ -1866,18 +2421,217 @@ export default function MapTab() {
                           </View>
                         </View>
                       )}
-                      {selectedCampground.phone && (
+                      {(selectedCampground.phone ?? ridb?.phone) && (
                         <View style={styles.trailDetailItem}>
                           <Ionicons name="call-outline" size={16} color={Colors.textSecondary} />
                           <View>
                             <Text style={styles.trailDetailLabel}>Phone</Text>
                             <Text style={styles.trailDetailValue}>
-                              {selectedCampground.phone}
+                              {selectedCampground.phone ?? ridb?.phone}
+                            </Text>
+                          </View>
+                        </View>
+                      )}
+                      {(selectedCampground.website ?? ridb?.email) && (
+                        <View style={styles.trailDetailItem}>
+                          <Ionicons name="globe-outline" size={16} color={Colors.textSecondary} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.trailDetailLabel}>
+                              {selectedCampground.website ? "Website" : "Email"}
+                            </Text>
+                            <Pressable
+                              onPress={() => {
+                                const url = selectedCampground.website ?? (ridb?.email ? `mailto:${ridb.email}` : null);
+                                if (url) Linking.openURL(url);
+                              }}
+                            >
+                              <Text style={[styles.trailDetailValue, { color: "#3b82f6" }]} numberOfLines={1}>
+                                {selectedCampground.website ?? ridb?.email}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      )}
+                      {ridb?.stayLimit && (
+                        <View style={styles.trailDetailItem}>
+                          <Ionicons name="moon-outline" size={16} color={Colors.textSecondary} />
+                          <View>
+                            <Text style={styles.trailDetailLabel}>Stay Limit</Text>
+                            <Text style={styles.trailDetailValue}>{ridb.stayLimit}</Text>
+                          </View>
+                        </View>
+                      )}
+                      {ridb?.adaAccess && (
+                        <View style={styles.trailDetailItem}>
+                          <Ionicons
+                            name="accessibility-outline"
+                            size={16}
+                            color={Colors.textSecondary}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.trailDetailLabel}>Accessibility</Text>
+                            <Text style={styles.trailDetailValue} numberOfLines={2}>
+                              {ridb.adaAccess}
                             </Text>
                           </View>
                         </View>
                       )}
                     </View>
+
+                    {/* RIDB description */}
+                    {ridb?.description ? (
+                      <View style={styles.ridbDescWrap}>
+                        <Text style={styles.ridbDescText} numberOfLines={4}>
+                          {ridb.description}
+                        </Text>
+                        <Text style={styles.ridbSource}>Source: Recreation.gov</Text>
+                      </View>
+                    ) : ridb === undefined ? (
+                      <Text style={styles.ridbLoading}>Loading info…</Text>
+                    ) : null}
+
+                    {/* RIDB activity tags */}
+                    {ridb?.activities && ridb.activities.length > 0 && (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.activityTagRow}
+                      >
+                        {ridb.activities.slice(0, 10).map((a) => (
+                          <View key={a} style={styles.activityTag}>
+                            <Text style={styles.activityTagText}>{a}</Text>
+                          </View>
+                        ))}
+                      </ScrollView>
+                    )}
+
+                    {/* ── Campsite drill-down ── */}
+                    {ridb && (ridb.campsiteCount > 0 || (ridbCampsites[selectedCampground.id]?.length ?? 0) > 0) && (() => {
+                      const sites = ridbCampsites[selectedCampground.id] ?? [];
+                      const FILTER_OPTIONS: { key: typeof campsiteFilter; label: string }[] = [
+                        { key: "all", label: "All" },
+                        { key: "tent", label: "Tent" },
+                        { key: "electric", label: "Electric" },
+                        { key: "hookup", label: "Full Hookup" },
+                        { key: "walkin", label: "Walk-In" },
+                        { key: "ada", label: "ADA" },
+                      ];
+                      const filtered = sites.filter((s) => {
+                        if (campsiteFilter === "tent") return /tent only/i.test(s.type);
+                        if (campsiteFilter === "electric") return s.electric != null || /electric/i.test(s.type);
+                        if (campsiteFilter === "hookup") return /full hookup/i.test(s.type);
+                        if (campsiteFilter === "walkin") return /walk.to|hike.to/i.test(s.type);
+                        if (campsiteFilter === "ada") return s.accessible;
+                        return true;
+                      });
+                      const count = ridb.campsiteCount || sites.length;
+                      return (
+                        <View style={styles.campsiteSection}>
+                          <Pressable
+                            style={styles.campsiteHeader}
+                            onPress={() => setCampsitesExpanded((v) => !v)}
+                          >
+                            <Text style={styles.campsiteSectionTitle}>
+                              🏕 {count} Individual Sites
+                            </Text>
+                            <Ionicons
+                              name={campsitesExpanded ? "chevron-up" : "chevron-down"}
+                              size={16}
+                              color={Colors.textSecondary}
+                            />
+                          </Pressable>
+
+                          {campsitesExpanded && (
+                            <>
+                              {/* Filter chips */}
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.siteFilterRow}
+                              >
+                                {FILTER_OPTIONS.map(({ key, label }) => (
+                                  <Pressable
+                                    key={key}
+                                    style={[
+                                      styles.siteFilterChip,
+                                      campsiteFilter === key && {
+                                        backgroundColor: CAMPGROUND_COLOR + "28",
+                                        borderColor: CAMPGROUND_COLOR,
+                                      },
+                                    ]}
+                                    onPress={() => setCampsiteFilter(key)}
+                                  >
+                                    <Text
+                                      style={[
+                                        styles.siteFilterText,
+                                        campsiteFilter === key && { color: CAMPGROUND_COLOR },
+                                      ]}
+                                    >
+                                      {label}
+                                    </Text>
+                                  </Pressable>
+                                ))}
+                              </ScrollView>
+
+                              {sites.length === 0 ? (
+                                <Text style={styles.ridbLoading}>Loading sites…</Text>
+                              ) : filtered.length === 0 ? (
+                                <Text style={styles.ridbLoading}>No sites match this filter</Text>
+                              ) : (
+                                filtered.slice(0, 30).map((site) => (
+                                  <View key={site.campsiteId} style={styles.siteRow}>
+                                    <View style={styles.siteRowTop}>
+                                      <Text style={styles.siteName} numberOfLines={1}>
+                                        {site.name || `Site ${site.campsiteId}`}
+                                      </Text>
+                                      {site.accessible && (
+                                        <Ionicons name="accessibility" size={13} color={CAMPGROUND_COLOR} />
+                                      )}
+                                    </View>
+                                    <View style={styles.siteBadgeRow}>
+                                      <View style={styles.siteBadge}>
+                                        <Text style={styles.siteBadgeText} numberOfLines={1}>
+                                          {site.type}
+                                        </Text>
+                                      </View>
+                                      {site.electric && (
+                                        <View style={[styles.siteBadge, styles.siteBadgeElectric]}>
+                                          <Text style={[styles.siteBadgeText, { color: "#f59e0b" }]}>
+                                            ⚡ {site.electric}
+                                          </Text>
+                                        </View>
+                                      )}
+                                      {site.water && (
+                                        <View style={[styles.siteBadge, styles.siteBadgeWater]}>
+                                          <Text style={[styles.siteBadgeText, { color: "#38bdf8" }]}>
+                                            💧 Water
+                                          </Text>
+                                        </View>
+                                      )}
+                                      {site.maxVehicleLength && (
+                                        <View style={styles.siteBadge}>
+                                          <Text style={styles.siteBadgeText}>
+                                            🚐 {site.maxVehicleLength}ft
+                                          </Text>
+                                        </View>
+                                      )}
+                                      {site.shade && (
+                                        <View style={styles.siteBadge}>
+                                          <Text style={styles.siteBadgeText}>🌳 {site.shade}</Text>
+                                        </View>
+                                      )}
+                                    </View>
+                                    {site.loop ? (
+                                      <Text style={styles.siteLoop}>Loop: {site.loop}</Text>
+                                    ) : null}
+                                  </View>
+                                ))
+                              )}
+                            </>
+                          )}
+                        </View>
+                      );
+                    })()}
 
                     {!user && hasGaps && (
                       <Pressable
@@ -1912,6 +2666,19 @@ export default function MapTab() {
                           Directions
                         </Text>
                       </Pressable>
+                      {ridb?.reservationUrl && (
+                        <Pressable
+                          style={[styles.directionsBtn, { borderColor: "#f59e0b", flex: 1.4 }]}
+                          onPress={() => Linking.openURL(ridb.reservationUrl!)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Book on Recreation.gov"
+                        >
+                          <Ionicons name="calendar-outline" size={15} color="#f59e0b" />
+                          <Text style={[styles.directionsBtnText, { color: "#f59e0b" }]}>
+                            Book on Rec.gov
+                          </Text>
+                        </Pressable>
+                      )}
                     </View>
 
                     {campSavedOffline && (
@@ -1922,6 +2689,8 @@ export default function MapTab() {
                         </Text>
                       </View>
                     )}
+                    </>
+                    )}
                   </ScrollView>
                 )}
               </View>
@@ -1929,100 +2698,68 @@ export default function MapTab() {
           );
         })()}
 
-      {/* ── Trail preview detail sheet ── */}
-      {selectedTrailPreview && (
+      {/* ── Discovery POI detail sheet ── */}
+      {selectedPoi && (
         <View style={styles.detailOverlay}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setSelectedTrailPreview(null)}
-          />
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedPoi(null)} />
           <View style={styles.detailSheet}>
             <View style={styles.sheetHandle} />
             <View style={[styles.sheetHeader, { paddingHorizontal: 20 }]}>
-              <View
-                style={[
-                  styles.trailIconWrap,
-                  { backgroundColor: selectedTrailPreview.color + "33" },
-                ]}
-              >
-                <Ionicons name="walk" size={26} color={selectedTrailPreview.color} />
+              <View style={[styles.trailIconWrap, { backgroundColor: selectedPoi.color + "33" }]}>
+                <Ionicons
+                  name={
+                    selectedPoi.category === "viewpoint" ? "eye" :
+                    selectedPoi.category === "waterfall" ? "water" :
+                    selectedPoi.category === "peak" ? "triangle" :
+                    selectedPoi.category === "picnic" ? "restaurant" :
+                    "water"
+                  }
+                  size={26}
+                  color={selectedPoi.color}
+                />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.sheetSpecies} numberOfLines={2}>
-                  {selectedTrailPreview.name}
+                  {selectedPoi.name}
                 </Text>
                 <View style={styles.difficultyBadgeRow}>
-                  <View
-                    style={[
-                      styles.difficultyBadge,
-                      { backgroundColor: selectedTrailPreview.color },
-                    ]}
-                  >
+                  <View style={[styles.difficultyBadge, { backgroundColor: selectedPoi.color }]}>
                     <Text style={styles.difficultyBadgeText}>
-                      {DIFFICULTY_LABELS[selectedTrailPreview.difficulty]}
+                      {POI_LABELS[selectedPoi.category]}
                     </Text>
                   </View>
+                  {selectedPoi.elevation && (
+                    <View style={[styles.difficultyBadge, { backgroundColor: "#78716c" }]}>
+                      <Text style={styles.difficultyBadgeText}>
+                        {Math.round(parseFloat(selectedPoi.elevation) * 3.281)}ft
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
-              <Pressable
-                onPress={() => setSelectedTrailPreview(null)}
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-              >
+              <Pressable onPress={() => setSelectedPoi(null)} accessibilityRole="button" accessibilityLabel="Close">
                 <Ionicons name="close" size={22} color={Colors.textSecondary} />
               </Pressable>
             </View>
-            <View style={[styles.sheetScrollContent, { paddingBottom: 32 }]}>
+
+            <View style={styles.sheetScrollContent}>
+              {selectedPoi.description && (
+                <Text style={[styles.trailDetailValue, { marginBottom: 12 }]}>
+                  {selectedPoi.description}
+                </Text>
+              )}
               <View style={styles.sheetActionRow}>
                 <Pressable
-                  style={[
-                    styles.directionsBtn,
-                    { borderColor: selectedTrailPreview.color, flex: 1 },
-                  ]}
+                  style={[styles.directionsBtn, { borderColor: selectedPoi.color }]}
                   onPress={() =>
-                    openDirections(
-                      selectedTrailPreview.latitude,
-                      selectedTrailPreview.longitude,
-                      selectedTrailPreview.name
-                    )
+                    openDirections(selectedPoi.latitude, selectedPoi.longitude, selectedPoi.name)
                   }
                   accessibilityRole="button"
-                  accessibilityLabel="Get directions to trail"
+                  accessibilityLabel="Get directions"
                 >
-                  <Ionicons
-                    name="navigate-outline"
-                    size={15}
-                    color={selectedTrailPreview.color}
-                  />
-                  <Text
-                    style={[styles.directionsBtnText, { color: selectedTrailPreview.color }]}
-                  >
+                  <Ionicons name="navigate-outline" size={15} color={selectedPoi.color} />
+                  <Text style={[styles.directionsBtnText, { color: selectedPoi.color }]}>
                     Directions
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.directionsBtn,
-                    { borderColor: Colors.textSecondary, flex: 1 },
-                  ]}
-                  onPress={() => {
-                    setSelectedTrailPreview(null);
-                    cameraRef.current?.setCamera({
-                      centerCoordinate: [
-                        selectedTrailPreview.longitude,
-                        selectedTrailPreview.latitude,
-                      ],
-                      zoomLevel: 14,
-                      animationDuration: 400,
-                      animationMode: "flyTo",
-                    });
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Zoom in to trail"
-                >
-                  <Ionicons name="search-outline" size={15} color={Colors.textSecondary} />
-                  <Text style={[styles.directionsBtnText, { color: Colors.textSecondary }]}>
-                    Zoom In
                   </Text>
                 </Pressable>
               </View>
@@ -2030,6 +2767,284 @@ export default function MapTab() {
           </View>
         </View>
       )}
+
+      {/* ── OSM park detail sheet ── */}
+      {selectedOsmPark && (
+        <View style={styles.detailOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelectedOsmPark(null)} />
+          <View style={styles.detailSheet}>
+            <View style={styles.sheetHandle} />
+            <View style={[styles.sheetHeader, { paddingHorizontal: 20 }]}>
+              <View style={[styles.trailIconWrap, { backgroundColor: selectedOsmPark.color + "33" }]}>
+                <Ionicons name="leaf" size={26} color={selectedOsmPark.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetSpecies} numberOfLines={2}>
+                  {selectedOsmPark.name}
+                </Text>
+                <View style={styles.difficultyBadgeRow}>
+                  <View style={[styles.difficultyBadge, { backgroundColor: selectedOsmPark.color }]}>
+                    <Text style={styles.difficultyBadgeText}>
+                      {selectedOsmPark.parkType === "state"
+                        ? "State Park"
+                        : selectedOsmPark.parkType === "county"
+                        ? "County Park"
+                        : selectedOsmPark.parkType === "regional"
+                        ? "Regional Park"
+                        : selectedOsmPark.parkType === "nature_reserve"
+                        ? "Nature Reserve"
+                        : "Park"}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+              <Pressable
+                onPress={() => setSelectedOsmPark(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={22} color={Colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <View style={styles.sheetScrollContent}>
+              {selectedOsmPark.operator && (
+                <View style={styles.trailDetailItem}>
+                  <Ionicons name="business-outline" size={16} color={Colors.textSecondary} />
+                  <View>
+                    <Text style={styles.trailDetailLabel}>Operator</Text>
+                    <Text style={styles.trailDetailValue}>{selectedOsmPark.operator}</Text>
+                  </View>
+                </View>
+              )}
+
+              <View style={styles.sheetActionRow}>
+                <Pressable
+                  style={[styles.directionsBtn, { borderColor: selectedOsmPark.color }]}
+                  onPress={() =>
+                    openDirections(selectedOsmPark.latitude, selectedOsmPark.longitude, selectedOsmPark.name)
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel="Get directions"
+                >
+                  <Ionicons name="navigate-outline" size={15} color={selectedOsmPark.color} />
+                  <Text style={[styles.directionsBtnText, { color: selectedOsmPark.color }]}>
+                    Directions
+                  </Text>
+                </Pressable>
+                {selectedOsmPark.website && (
+                  <Pressable
+                    style={[styles.directionsBtn, { borderColor: selectedOsmPark.color }]}
+                    onPress={() => Linking.openURL(selectedOsmPark.website!)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Visit website"
+                  >
+                    <Ionicons name="globe-outline" size={15} color={selectedOsmPark.color} />
+                    <Text style={[styles.directionsBtnText, { color: selectedOsmPark.color }]}>
+                      Website
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* ── Trail preview detail sheet ── */}
+      {selectedTrailPreview && (() => {
+        const td = trailDetailCache[selectedTrailPreview.id] ?? null;
+        const color = td?.color ?? selectedTrailPreview.color;
+        const diffLabel = DIFFICULTY_LABELS[td?.difficulty ?? selectedTrailPreview.difficulty];
+        return (
+          <View style={styles.detailOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setSelectedTrailPreview(null)}
+            />
+            <View style={styles.detailSheet}>
+              <View style={styles.sheetHandle} />
+              <View style={[styles.sheetHeader, { paddingHorizontal: 20 }]}>
+                <View style={[styles.trailIconWrap, { backgroundColor: color + "33" }]}>
+                  <Ionicons name="walk" size={26} color={color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sheetSpecies} numberOfLines={2}>
+                    {selectedTrailPreview.name}
+                  </Text>
+                  <View style={styles.difficultyBadgeRow}>
+                    <View style={[styles.difficultyBadge, { backgroundColor: color }]}>
+                      <Text style={styles.difficultyBadgeText}>{diffLabel}</Text>
+                    </View>
+                    {td?.distanceMiles != null && (
+                      <Text style={{ color: Colors.textSecondary, fontSize: 13, marginLeft: 8 }}>
+                        {td.distanceMiles} mi
+                      </Text>
+                    )}
+                  </View>
+                </View>
+                <Pressable
+                  onPress={() => setSelectedTrailPreview(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                >
+                  <Ionicons name="close" size={22} color={Colors.textSecondary} />
+                </Pressable>
+              </View>
+
+              <ScrollView style={styles.sheetScrollContent} contentContainerStyle={{ paddingBottom: 32 }}>
+                {/* ── Action buttons ── */}
+                <View style={styles.sheetActionRow}>
+                  <Pressable
+                    style={[styles.directionsBtn, { borderColor: color, flex: 1 }]}
+                    onPress={() =>
+                      openDirections(
+                        selectedTrailPreview.latitude,
+                        selectedTrailPreview.longitude,
+                        selectedTrailPreview.name
+                      )
+                    }
+                    accessibilityRole="button"
+                  >
+                    <Ionicons name="navigate-outline" size={15} color={color} />
+                    <Text style={[styles.directionsBtnText, { color }]}>Directions</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.directionsBtn, { borderColor: Colors.textSecondary, flex: 1 }]}
+                    onPress={() => {
+                      setSelectedTrailPreview(null);
+                      cameraRef.current?.setCamera({
+                        centerCoordinate: [selectedTrailPreview.longitude, selectedTrailPreview.latitude],
+                        zoomLevel: 14,
+                        animationDuration: 400,
+                        animationMode: "flyTo",
+                      });
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Ionicons name="search-outline" size={15} color={Colors.textSecondary} />
+                    <Text style={[styles.directionsBtnText, { color: Colors.textSecondary }]}>Zoom In</Text>
+                  </Pressable>
+                  {td?.website && (
+                    <Pressable
+                      style={[styles.directionsBtn, { borderColor: "#3b82f6", flex: 1 }]}
+                      onPress={() => Linking.openURL(td.website!)}
+                      accessibilityRole="button"
+                    >
+                      <Ionicons name="globe-outline" size={15} color="#3b82f6" />
+                      <Text style={[styles.directionsBtnText, { color: "#3b82f6" }]}>Website</Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                {/* ── Loading indicator ── */}
+                {trailDetailLoading && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 }}>
+                    <ActivityIndicator size="small" color={color} />
+                    <Text style={{ color: Colors.textSecondary, fontSize: 13 }}>Loading trail info...</Text>
+                  </View>
+                )}
+
+                {/* ── Trail detail grid ── */}
+                {td && (
+                  <View style={{ marginTop: 16, gap: 12 }}>
+                    {td.distanceMiles != null && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="resize-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Distance</Text>
+                        <Text style={styles.infoValue}>{td.distanceMiles} miles</Text>
+                      </View>
+                    )}
+                    <View style={styles.infoRow}>
+                      <Ionicons name="footsteps-outline" size={16} color={Colors.textSecondary} />
+                      <Text style={styles.infoLabel}>Surface</Text>
+                      <Text style={styles.infoValue}>{td.surface}</Text>
+                    </View>
+                    <View style={styles.infoRow}>
+                      <Ionicons name="paw-outline" size={16} color={Colors.textSecondary} />
+                      <Text style={styles.infoLabel}>Dogs</Text>
+                      <Text style={styles.infoValue}>
+                        {td.dogFriendly === true ? "Allowed" : td.dogFriendly === false ? "Not allowed" : "Unknown"}
+                      </Text>
+                    </View>
+                    <View style={styles.infoRow}>
+                      <Ionicons name="cash-outline" size={16} color={Colors.textSecondary} />
+                      <Text style={styles.infoLabel}>Fee</Text>
+                      <Text style={styles.infoValue}>
+                        {td.fee === true ? "Required" : td.fee === false ? "Free" : "Unknown"}
+                      </Text>
+                    </View>
+                    {td.wheelchair != null && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="accessibility-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Wheelchair</Text>
+                        <Text style={styles.infoValue}>{td.wheelchair ? "Accessible" : "Not accessible"}</Text>
+                      </View>
+                    )}
+                    {td.lit != null && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="flashlight-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Lit</Text>
+                        <Text style={styles.infoValue}>{td.lit ? "Yes" : "No"}</Text>
+                      </View>
+                    )}
+                    {td.openingHours && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="time-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Hours</Text>
+                        <Text style={styles.infoValue}>{td.openingHours}</Text>
+                      </View>
+                    )}
+                    {td.operator && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="business-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Operator</Text>
+                        <Text style={styles.infoValue}>{td.operator}</Text>
+                      </View>
+                    )}
+                    {td.access && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="lock-open-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Access</Text>
+                        <Text style={styles.infoValue}>{td.access}</Text>
+                      </View>
+                    )}
+                    {td.incline && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="trending-up-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>Incline</Text>
+                        <Text style={styles.infoValue}>{td.incline}</Text>
+                      </View>
+                    )}
+                    {td.mtbScale && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="bicycle-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.infoLabel}>MTB Scale</Text>
+                        <Text style={styles.infoValue}>{td.mtbScale}</Text>
+                      </View>
+                    )}
+                    {td.description && (
+                      <View style={{ marginTop: 4 }}>
+                        <Text style={{ color: Colors.textSecondary, fontSize: 12, marginBottom: 4 }}>Description</Text>
+                        <Text style={{ color: Colors.text, fontSize: 14, lineHeight: 20 }} numberOfLines={6}>
+                          {td.description}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* ── No detail fallback ── */}
+                {!trailDetailLoading && !td && (
+                  <Text style={{ color: Colors.textSecondary, fontSize: 13, marginTop: 12 }}>
+                    Trail info unavailable — tap Zoom In to see the trail on the map.
+                  </Text>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        );
+      })()}
 
       {/* ── Sighting detail overlay ── */}
       {selectedSighting && (
@@ -2366,6 +3381,26 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   sheetScrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  infoLabel: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    flex: 1,
+  },
+  infoValue: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: "500",
+    textAlign: "right",
+    flex: 1,
+  },
   sheetHandle: {
     width: 40,
     height: 4,
@@ -2436,6 +3471,32 @@ const styles = StyleSheet.create({
   },
   statusBadgeRow2: { top: 104 },
   statusBadgeText: { fontSize: 13, fontFamily: "Montserrat-Medium" },
+
+  // 3D toggle
+  threeDBtn: {
+    position: "absolute",
+    top: 155,
+    right: 16,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "rgba(0,0,0,0.78)",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  threeDActive: { backgroundColor: "#ea580c" },
+  threeDText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  threeDTextActive: { color: "#fff" },
 
   // Trail legend
   trailLegend: {
@@ -2509,6 +3570,152 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "Montserrat-Medium",
     marginTop: 1,
+  },
+  ridbTag: {
+    color: "#f59e0b",
+    fontSize: 10,
+    fontFamily: "Montserrat-Medium",
+    marginTop: 1,
+  },
+  ridbDescWrap: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.07)",
+  },
+  ridbDescText: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontFamily: "Montserrat-Medium",
+    lineHeight: 19,
+  },
+  ridbSource: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontFamily: "Montserrat-Medium",
+    marginTop: 5,
+  },
+  ridbLoading: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontFamily: "Montserrat-Medium",
+    marginTop: 12,
+    textAlign: "center",
+  },
+  activityTagRow: {
+    flexDirection: "row",
+    gap: 6,
+    paddingVertical: 10,
+  },
+  activityTag: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  activityTagText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontFamily: "Montserrat-Medium",
+  },
+  // Photo carousel
+  photoCarousel: {
+    marginHorizontal: -16,
+    marginBottom: 14,
+  },
+  photoCarouselRow: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  photoThumb: {
+    width: 130,
+    height: 90,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+  },
+  photoThumbFirst: {
+    width: 200,
+    height: 130,
+  },
+  // Campsite section
+  campsiteSection: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.07)",
+  },
+  campsiteHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 4,
+  },
+  campsiteSectionTitle: {
+    color: Colors.text,
+    fontSize: 14,
+    fontFamily: "Montserrat-SemiBold",
+  },
+  siteFilterRow: {
+    flexDirection: "row",
+    gap: 6,
+    paddingVertical: 10,
+  },
+  siteFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+  },
+  siteFilterText: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontFamily: "Montserrat-SemiBold",
+  },
+  siteRow: {
+    paddingVertical: 9,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.05)",
+  },
+  siteRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 5,
+  },
+  siteName: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 13,
+    fontFamily: "Montserrat-SemiBold",
+  },
+  siteBadgeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 5,
+  },
+  siteBadge: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  siteBadgeElectric: {
+    backgroundColor: "rgba(245,158,11,0.12)",
+  },
+  siteBadgeWater: {
+    backgroundColor: "rgba(56,189,248,0.12)",
+  },
+  siteBadgeText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontFamily: "Montserrat-Medium",
+  },
+  siteLoop: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontFamily: "Montserrat-Medium",
+    marginTop: 4,
   },
   contributePrompt: {
     flexDirection: "row",
@@ -2590,6 +3797,42 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
+  // Elevation profile
+  elevationWrap: {
+    marginTop: 16,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 12,
+    padding: 14,
+  },
+  elevationTitle: {
+    color: Colors.text,
+    fontSize: 14,
+    fontFamily: "Montserrat-SemiBold",
+    marginBottom: 8,
+  },
+  elevationStats: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 10,
+  },
+  elevationStat: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  elevationStatText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontFamily: "Montserrat-Medium",
+  },
+  elevationChart: {
+    flexDirection: "row",
+    height: 68,
+    alignItems: "flex-end",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+
   // Action buttons
   sheetActionRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
   directionsBtn: {
@@ -2646,3 +3889,5 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-Bold",
   },
 });
+
+

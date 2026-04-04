@@ -5,5 +5,7 @@ app 6759922299
 screenshots_path "./screenshots"
 overwrite_screenshots true
 skip_binary_upload true
-skip_metadata true
+skip_metadata false
 force true
+app_review_information({})
+app_review_attachment_file ""

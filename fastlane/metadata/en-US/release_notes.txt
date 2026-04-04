@@ -1,0 +1,9 @@
+What's new in NatureFind:
+
+- NatureFind Pro subscription with 8 premium features
+- Trail route details, campground deep-dive, 3D terrain, hidden gems, satellite imagery, drive time zones, wildlife intelligence, and unlimited favorites
+- Contextual upgrade prompts that show what you're missing
+- Community tab with unified activity feed, photos, and sightings
+- Onboarding flow for new users
+- Email/password sign-in alongside Apple and Google
+- Bug fixes and performance improvements

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="NatureFind — Discover national parks, hiking trails, campgrounds, and wildlife near you. The ultimate outdoor companion for nature lovers." />
+  <meta name="keywords" content="national parks app, hiking trails, campgrounds, wildlife sightings, nature app, outdoor app" />
+  <meta property="og:title" content="NatureFind — Discover the Wild" />
+  <meta property="og:description" content="Find national parks, trails, campgrounds, and wildlife near you. Live conditions, community reports, and Recreation.gov booking — all in one app." />
+  <meta property="og:image" content="https://naturefind.app/og-image.png" />
+  <meta property="og:url" content="https://naturefind.app" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <title>NatureFind — Discover the Wild</title>
+  <link rel="icon" href="/favicon.ico" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green-900: #0a1f13;
+      --green-800: #1b4332;
+      --green-700: #2d6a4f;
+      --green-500: #52b788;
+      --green-300: #95d5b2;
+      --amber:     #f59e0b;
+      --text:      #f0f4f0;
+      --text-muted:#9ab5a4;
+      --surface:   #162b1e;
+      --surface2:  #1e3828;
+      --border:    #2d4a3a;
+      --radius:    16px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--green-900);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 5%; height: 64px;
+      background: rgba(10,31,19,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 18px; font-weight: 700; letter-spacing: 0.5px; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-logo svg { width: 32px; height: 32px; }
+    .nav-links { display: flex; gap: 28px; list-style: none; }
+    .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 14px; transition: color .2s; }
+    .nav-links a:hover { color: var(--green-300); }
+    .nav-cta {
+      background: var(--green-700); color: var(--text) !important; font-weight: 600 !important;
+      padding: 8px 18px; border-radius: 20px; transition: background .2s !important;
+    }
+    .nav-cta:hover { background: var(--green-500) !important; color: var(--green-900) !important; }
+    @media (max-width: 600px) { .nav-links { display: none; } }
+
+    /* ── Hero ── */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center;
+      padding: 100px 5% 80px;
+      position: relative; overflow: hidden;
+    }
+    .hero::before {
+      content: "";
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 80% 60% at 50% 40%, rgba(45,106,79,0.35) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(82,183,136,0.15); border: 1px solid rgba(82,183,136,0.3);
+      color: var(--green-300); border-radius: 20px;
+      padding: 6px 16px; font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
+      margin-bottom: 28px;
+    }
+    .hero-badge::before { content: "🌿"; }
+    h1 {
+      font-size: clamp(42px, 8vw, 80px);
+      font-weight: 800; letter-spacing: -2px; line-height: 1.05;
+      margin-bottom: 24px;
+    }
+    h1 span { color: var(--green-500); }
+    .hero-sub {
+      font-size: clamp(16px, 2.5vw, 20px);
+      color: var(--text-muted); max-width: 560px; margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+    .hero-actions { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: var(--green-500); color: var(--green-900);
+      font-weight: 700; font-size: 16px;
+      padding: 16px 32px; border-radius: 50px;
+      text-decoration: none; transition: transform .2s, box-shadow .2s;
+      box-shadow: 0 0 30px rgba(82,183,136,0.3);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 40px rgba(82,183,136,0.45); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: transparent; color: var(--text);
+      font-weight: 600; font-size: 15px;
+      padding: 15px 28px; border-radius: 50px;
+      border: 1px solid var(--border);
+      text-decoration: none; transition: border-color .2s, background .2s;
+    }
+    .btn-secondary:hover { border-color: var(--green-500); background: rgba(82,183,136,0.08); }
+    .hero-meta {
+      margin-top: 56px; color: var(--text-muted); font-size: 13px;
+      display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center;
+    }
+    .hero-meta span { display: flex; align-items: center; gap: 6px; }
+    .stars { color: #fbbf24; letter-spacing: 1px; }
+
+    /* ── Features ── */
+    .section { padding: 100px 5%; max-width: 1200px; margin: 0 auto; }
+    .section-label {
+      color: var(--green-500); font-size: 13px; font-weight: 700;
+      letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; text-align: center;
+    }
+    h2 {
+      font-size: clamp(28px, 5vw, 48px); font-weight: 800;
+      letter-spacing: -1px; text-align: center; margin-bottom: 16px;
+    }
+    .section-sub {
+      color: var(--text-muted); text-align: center; font-size: 17px;
+      max-width: 580px; margin: 0 auto 60px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      transition: border-color .25s, transform .25s;
+    }
+    .feature-card:hover { border-color: var(--green-500); transform: translateY(-3px); }
+    .feature-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      background: rgba(82,183,136,0.15);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; margin-bottom: 16px;
+    }
+    .feature-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+    .feature-card p { color: var(--text-muted); font-size: 14px; line-height: 1.65; }
+
+    /* ── Condition score highlight ── */
+    .highlight-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 60px; align-items: center;
+      margin: 40px 0;
+    }
+    @media (max-width: 768px) { .highlight-row { grid-template-columns: 1fr; } }
+    .highlight-text h2 { text-align: left; margin-bottom: 16px; }
+    .highlight-text p { color: var(--text-muted); font-size: 16px; line-height: 1.7; margin-bottom: 20px; }
+    .highlight-bullets { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+    .highlight-bullets li {
+      display: flex; align-items: center; gap: 10px;
+      color: var(--text-muted); font-size: 14px;
+    }
+    .bullet-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green-500); flex-shrink: 0;
+    }
+    .condition-mockup {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px; padding: 24px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .cond-header { display: flex; justify-content: space-between; align-items: center; }
+    .cond-park { font-weight: 700; font-size: 16px; }
+    .cond-score {
+      background: #052e16; color: #4ade80;
+      font-weight: 800; font-size: 22px;
+      padding: 6px 14px; border-radius: 10px;
+    }
+    .cond-label { color: #4ade80; font-weight: 700; font-size: 13px; }
+    .cond-detail { color: var(--text-muted); font-size: 13px; }
+    .cond-divider { height: 1px; background: var(--border); }
+    .cond-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+    .cond-badge {
+      background: var(--surface); border-radius: 20px;
+      padding: 5px 12px; font-size: 12px; color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .cond-badge.green { background: #052e16; color: #4ade80; border-color: #1a4a2a; }
+    .cond-report-row { display: flex; justify-content: space-between; align-items: center; }
+    .cond-report-title { font-weight: 600; font-size: 14px; }
+    .cond-report-btn {
+      background: rgba(82,183,136,0.15); color: var(--green-300);
+      border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+    }
+    .cond-report-item {
+      background: var(--surface); border-radius: 10px; padding: 10px 12px;
+    }
+    .cond-report-item-top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .cond-report-open { color: #4ade80; font-size: 11px; font-weight: 700; }
+    .cond-report-time { color: var(--text-muted); font-size: 11px; }
+    .cond-report-note { color: var(--text-muted); font-size: 12px; }
+
+    /* ── Activities ── */
+    .activities-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+    }
+    .activity-pill {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px;
+      text-align: center; transition: border-color .2s;
+    }
+    .activity-pill:hover { border-color: var(--green-500); }
+    .activity-pill .emo { font-size: 28px; margin-bottom: 8px; }
+    .activity-pill span { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+
+    /* ── Data sources ── */
+    .sources-row {
+      display: flex; flex-wrap: wrap; gap: 14px; justify-content: center;
+    }
+    .source-chip {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 18px;
+      font-size: 13px; font-weight: 600; color: var(--text-muted);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .source-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-500); }
+
+    /* ── CTA Section ── */
+    .cta-section {
+      text-align: center;
+      background: linear-gradient(135deg, var(--surface2) 0%, var(--green-800) 100%);
+      border: 1px solid var(--border); border-radius: 28px;
+      padding: 72px 40px; margin: 0 5% 80px;
+      position: relative; overflow: hidden;
+    }
+    .cta-section::before {
+      content: "";
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 60% 60% at 50% 0%, rgba(82,183,136,0.2) 0%, transparent 70%);
+    }
+    .cta-section h2 { margin-bottom: 16px; position: relative; }
+    .cta-section p { color: var(--text-muted); font-size: 17px; margin-bottom: 36px; position: relative; }
+    .app-store-btn {
+      display: inline-flex; align-items: center; gap: 12px;
+      background: var(--text); color: var(--green-900);
+      font-weight: 700; font-size: 15px;
+      padding: 14px 28px; border-radius: 14px;
+      text-decoration: none; transition: opacity .2s;
+      position: relative;
+    }
+    .app-store-btn:hover { opacity: 0.92; }
+    .app-store-btn svg { width: 22px; height: 22px; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 5%;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 20px;
+    }
+    .footer-logo { font-size: 16px; font-weight: 700; color: var(--text-muted); }
+    .footer-links { display: flex; gap: 24px; list-style: none; }
+    .footer-links a { color: var(--text-muted); text-decoration: none; font-size: 13px; }
+    .footer-links a:hover { color: var(--green-300); }
+    .footer-copy { color: var(--text-muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <a href="/" class="nav-logo">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="16" fill="#1b4332"/>
+        <path d="M16 6 L20 13 H17 L21 20 H18 L22 27 H10 L14 20 H11 L15 13 H12 Z" fill="#52b788"/>
+      </svg>
+      NatureFind
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#activities">Activities</a></li>
+      <li><a href="#data">Data</a></li>
+      <li><a href="privacy.html">Privacy</a></li>
+      <li><a href="#download" class="nav-cta">Download</a></li>
+    </ul>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">Now on iOS</div>
+    <h1>Discover the <span>Wild</span><br>Around You</h1>
+    <p class="hero-sub">
+      Find national parks, hiking trails, campgrounds, and wildlife near you.
+      Real-time conditions, community reports, and Recreation.gov booking — all in one app.
+    </p>
+    <div class="hero-actions">
+      <a href="#download" class="btn-primary" id="download">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+        Download for iPhone
+      </a>
+      <a href="#features" class="btn-secondary">See Features →</a>
+    </div>
+    <div class="hero-meta">
+      <span><span class="stars">★★★★★</span> iOS App</span>
+      <span>🏕️ 400+ National Parks</span>
+      <span>🥾 Trail Maps Included</span>
+      <span>🆓 Free to Download</span>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <div class="section" id="features">
+    <p class="section-label">Features</p>
+    <h2>Everything the Outdoors Needs</h2>
+    <p class="section-sub">From park discovery to campground booking, NatureFind has you covered before, during, and after your adventure.</p>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🗺️</div>
+        <h3>Interactive Nature Map</h3>
+        <p>Explore parks, trails, campgrounds, and wildlife sightings on a live map. Toggle layers to see exactly what matters to you.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌤️</div>
+        <h3>Park Condition Scores</h3>
+        <p>A 0–100 daily score for every park based on temperature, wind, weather, and precipitation. Know if it's a Great Day before you go.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🏕️</div>
+        <h3>Campground Details</h3>
+        <p>Real campground data from Recreation.gov — sites, amenities, fees, and a direct booking link. Never show up to a closed campground again.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🥾</div>
+        <h3>Trail Maps & Difficulty</h3>
+        <p>Colored polyline trails with difficulty ratings, surface type, distance, and dog-friendly status — sourced directly from OpenStreetMap.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🦌</div>
+        <h3>Wildlife Sightings</h3>
+        <p>Log and discover wildlife sightings from the community. Bears, birds, elk — see what's been spotted near you in the last 24 hours.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📋</div>
+        <h3>Community Conditions</h3>
+        <p>Real-time trail status reports from other hikers — open, partial, or closed. Wildlife activity, crowding levels, and access notes.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⭐</div>
+        <h3>Park Reviews</h3>
+        <p>Read and write reviews for national parks. Rate your experience, upload photos, and help the community find the best spots.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📅</div>
+        <h3>Seasonal Hints</h3>
+        <p>Context-aware seasonal tips for every park — wildflower season, elk rut, whale migration, desert heat warnings, and more.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Condition score highlight -->
+  <div class="section">
+    <div class="highlight-row">
+      <div class="highlight-text">
+        <p class="section-label">Live Conditions</p>
+        <h2>Know Before<br>You Go</h2>
+        <p>NatureFind scores every national park daily using real-time weather data. Temperature, wind, precipitation, and sky conditions collapse into one number so you can decide at a glance.</p>
+        <ul class="highlight-bullets">
+          <li><span class="bullet-dot"></span>Real-time weather from Open-Meteo — updated hourly</li>
+          <li><span class="bullet-dot"></span>Color-coded: green for Great, amber for Fair, red for Poor</li>
+          <li><span class="bullet-dot"></span>Community reports layered on top for ground truth</li>
+          <li><span class="bullet-dot"></span>Seasonal hints based on park type, region, and time of year</li>
+        </ul>
+      </div>
+      <div class="condition-mockup">
+        <div class="cond-header">
+          <div>
+            <div class="cond-park">Yosemite National Park</div>
+            <div class="cond-label">Great Conditions Today</div>
+            <div class="cond-detail">68°F · Light breeze · Clear sky</div>
+          </div>
+          <div class="cond-score">87<span style="font-size:13px;font-weight:400;color:#6b8f7a">/100</span></div>
+        </div>
+        <div class="cond-divider"></div>
+        <div class="cond-badges">
+          <div class="cond-badge green">✓ Open</div>
+          <div class="cond-badge">👥 Light Crowds</div>
+          <div class="cond-badge">🐾 High Wildlife</div>
+        </div>
+        <div class="cond-divider"></div>
+        <div class="cond-report-row">
+          <div class="cond-report-title">Trail Conditions</div>
+          <div class="cond-report-btn">+ Report</div>
+        </div>
+        <div class="cond-report-item">
+          <div class="cond-report-item-top">
+            <div class="cond-report-open">✓ Open · Light Crowds · High Wildlife</div>
+            <div class="cond-report-time">2h ago</div>
+          </div>
+          <div class="cond-report-note">Half Dome cables are up, trail is dry. Saw a black bear near the valley floor at dawn.</div>
+        </div>
+        <div style="padding: 8px 4px;">
+          <div style="color:#6b8f7a;font-size:12px;font-style:italic;text-align:center;">🍂 Fall Rut Season — Elk rut peaks in October. Keep your distance from males.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Activities -->
+  <div class="section" id="activities">
+    <p class="section-label">Activities</p>
+    <h2>Find Parks for Every Pursuit</h2>
+    <p class="section-sub">Browse by activity and discover the best national parks for what you love — sorted by distance from your location.</p>
+    <div class="activities-grid">
+      <div class="activity-pill"><div class="emo">🥾</div><span>Hiking</span></div>
+      <div class="activity-pill"><div class="emo">🏕️</div><span>Camping</span></div>
+      <div class="activity-pill"><div class="emo">🎣</div><span>Fishing</span></div>
+      <div class="activity-pill"><div class="emo">🦌</div><span>Wildlife Watching</span></div>
+      <div class="activity-pill"><div class="emo">🌌</div><span>Stargazing</span></div>
+      <div class="activity-pill"><div class="emo">🧗</div><span>Climbing</span></div>
+      <div class="activity-pill"><div class="emo">🚣</div><span>Kayaking</span></div>
+      <div class="activity-pill"><div class="emo">🐦</div><span>Bird Watching</span></div>
+      <div class="activity-pill"><div class="emo">🚵</div><span>Mountain Biking</span></div>
+      <div class="activity-pill"><div class="emo">🏔️</div><span>Snowshoeing</span></div>
+      <div class="activity-pill"><div class="emo">🏊</div><span>Swimming</span></div>
+      <div class="activity-pill"><div class="emo">📸</div><span>More →</span></div>
+    </div>
+  </div>
+
+  <!-- Data Sources -->
+  <div class="section" id="data">
+    <p class="section-label">Powered By</p>
+    <h2>Best-in-Class Data Sources</h2>
+    <p class="section-sub">NatureFind pulls from the most authoritative public databases so you always have accurate, up-to-date information.</p>
+    <div class="sources-row">
+      <div class="source-chip"><span class="dot"></span>National Park Service API</div>
+      <div class="source-chip"><span class="dot"></span>Recreation.gov (RIDB)</div>
+      <div class="source-chip"><span class="dot"></span>OpenStreetMap / Overpass</div>
+      <div class="source-chip"><span class="dot"></span>Open-Meteo Weather</div>
+      <div class="source-chip"><span class="dot"></span>Mapbox Terrain Maps</div>
+      <div class="source-chip"><span class="dot"></span>Firebase Community Data</div>
+    </div>
+  </div>
+
+  <!-- CTA -->
+  <section class="cta-section" id="download">
+    <h2>Start Exploring Today</h2>
+    <p>Free to download. No subscription required to discover parks, trails, and wildlife near you.</p>
+    <a href="https://apps.apple.com/app/id6759922299" class="app-store-btn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+      Download on the App Store
+    </a>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-logo">🌿 NatureFind</div>
+    <ul class="footer-links">
+      <li><a href="privacy.html">Privacy Policy</a></li>
+      <li><a href="mailto:support@naturefind.app">Support</a></li>
+    </ul>
+    <div class="footer-copy">© 2026 NatureFind. All rights reserved.</div>
+  </footer>
+
+</body>
+</html>

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Linking } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -7,6 +7,7 @@ import { Colors } from "@/constants/Colors";
 import type { Park } from "@/services/npsApi";
 import { isOpenNow, isDogFriendly } from "@/utils/parkUtils";
 import { formatDurationShort } from "@/services/mapboxRoutingApi";
+import { getParkCondition, type ConditionScore } from "@/services/weatherApi";
 
 interface ParkCardProps {
   park: Park;
@@ -23,6 +24,15 @@ export default function ParkCard({ park, driveTime }: ParkCardProps) {
   const imageUrl = park.images?.[0]?.url;
   const openStatus = isOpenNow(park.operatingHours);
   const dogFriendly = isDogFriendly(park.activities);
+  const [condition, setCondition] = useState<ConditionScore | null>(null);
+
+  useEffect(() => {
+    const lat = parseFloat(park.latitude);
+    const lon = parseFloat(park.longitude);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      getParkCondition(lat, lon).then(setCondition).catch(() => {});
+    }
+  }, [park.latitude, park.longitude]);
 
   return (
     <Pressable
@@ -41,8 +51,16 @@ export default function ParkCard({ park, driveTime }: ParkCardProps) {
         <Text style={styles.meta} numberOfLines={1}>
           {park.states} &middot; {park.designation || "National Park"}
         </Text>
-        {(openStatus !== null || dogFriendly || driveTime != null) && (
+        {(openStatus !== null || dogFriendly || driveTime != null || condition !== null) && (
           <View style={styles.badgeRow}>
+            {condition && (
+              <View style={[styles.badge, { backgroundColor: condition.bgColor }]}>
+                <View style={[styles.conditionDot, { backgroundColor: condition.color }]} />
+                <Text style={[styles.badgeText, { color: condition.color }]}>
+                  {condition.label} · {condition.tempF}°F
+                </Text>
+              </View>
+            )}
             {driveTime != null && (
               <View style={[styles.badge, { backgroundColor: "#0c2340" }]}>
                 <Ionicons name="car-outline" size={11} color="#7dd3fc" />
@@ -152,6 +170,11 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11,
     fontWeight: "600",
+  },
+  conditionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   directionsBtn: {
     flexDirection: "row",

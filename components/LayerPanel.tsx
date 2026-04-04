@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "@/constants/Colors";
+import ProBadge from "@/components/ProBadge";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -27,6 +28,10 @@ export interface LayerConfig {
   zoomStatus?: string;
   /** Optional node rendered below the row when the layer is active */
   extra?: React.ReactNode;
+  /** When true, extra renders even when the layer is inactive */
+  alwaysShowExtra?: boolean;
+  /** When true, shows a PRO badge next to the layer name */
+  isPro?: boolean;
 }
 
 export interface LayerGroup {
@@ -150,7 +155,10 @@ export default function LayerPanel({ open, onOpen, onClose, groups, activeCount 
 
                     {/* Name + status */}
                     <View style={styles.layerInfo}>
-                      <Text style={styles.layerName}>{layer.name}</Text>
+                      <View style={styles.layerNameRow}>
+                        <Text style={styles.layerName}>{layer.name}</Text>
+                        {layer.isPro && !layer.active && <ProBadge size="small" />}
+                      </View>
                       <Text style={styles.layerDesc} numberOfLines={1}>
                         {layer.active && layer.zoomStatus ? layer.zoomStatus : layer.description}
                       </Text>
@@ -166,7 +174,7 @@ export default function LayerPanel({ open, onOpen, onClose, groups, activeCount 
                   </View>
 
                   {/* Extra content (e.g. date filter chips) */}
-                  {layer.active && layer.extra && (
+                  {(layer.active || layer.alwaysShowExtra) && layer.extra && (
                     <View style={[styles.extraWrap, { borderLeftColor: layer.color }]}>
                       {layer.extra}
                     </View>
@@ -325,6 +333,11 @@ const styles = StyleSheet.create({
   layerInfo: {
     flex: 1,
     gap: 2,
+  },
+  layerNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   layerName: {
     color: Colors.text,

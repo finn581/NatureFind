@@ -8,13 +8,20 @@
       "developmentClient": true,
       "distribution": "internal"
     },
+    "simulator": {
+      "ios": {
+        "simulator": true
+      }
+    },
     "preview": {
       "distribution": "internal"
     },
+    "testflight": {
+      "distribution": "store",
+      "channel": "testflight"
+    },
     "production": {
-      "ios": {
-        "autoIncrement": true
-      }
+      "ios": {}
     }
   },
   "submit": {

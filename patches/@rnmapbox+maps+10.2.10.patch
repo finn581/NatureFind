@@ -1,0 +1,26 @@
+diff --git a/ios/RNMBX/RNMBXMapView.swift b/ios/RNMBX/RNMBXMapView.swift
+index 80c77e4..deb8b26 100644
+--- a/ios/RNMBX/RNMBXMapView.swift
++++ b/ios/RNMBX/RNMBXMapView.swift
+@@ -642,7 +642,7 @@ open class RNMBXMapView: UIView, RCTInvalidating {
+         options.panEnabled = panEnabled.boolValue
+       }
+       if let panDecelerationFactor = value["panDecelerationFactor"] as? NSNumber {
+-        options.panDecelerationFactor = panDecelerationFactor.CGFloat
++        options.panDecelerationFactor = CGFloat(panDecelerationFactor.doubleValue)
+       }
+ #if RNMBX_11
+       if let simultaneousRotateAndPinchZoomEnabled = value["simultaneousRotateAndPinchZoomEnabled"] as? NSNumber {
+diff --git a/ios/RNMBX/RNMBXPointAnnotation.swift b/ios/RNMBX/RNMBXPointAnnotation.swift
+index ce2254a..66d2014 100644
+--- a/ios/RNMBX/RNMBXPointAnnotation.swift
++++ b/ios/RNMBX/RNMBXPointAnnotation.swift
+@@ -51,7 +51,7 @@ public class RNMBXPointAnnotation : RNMBXInteractiveElement {
+       if let image = annotation.image {
+         let size = image.image.size
+         annotation.iconAnchor = .topLeft
+-        annotation.iconOffset = [size.width * (anchor["x"]?.CGFloat ?? 0.0) * -1.0, size.height * (anchor["y"]?.CGFloat ?? 0.0) * -1.0]
++        annotation.iconOffset = [size.width * CGFloat(anchor["x"]?.doubleValue ?? 0.0) * -1.0, size.height * CGFloat(anchor["y"]?.doubleValue ?? 0.0) * -1.0]
+       }
+     }
+   }

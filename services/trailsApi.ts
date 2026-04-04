@@ -1,6 +1,6 @@
-// Overpass API — Direct OSM trail queries via Private.coffee (no rate limits, free)
+// Overpass API — Direct OSM trail queries
 
-const OVERPASS_BASE = "https://overpass-api.de/api/interpreter";
+import { overpassFetch } from "./overpassClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +16,7 @@ export interface Trail {
   access: string | null;
   coordinates: Array<{ latitude: number; longitude: number }>;
   color: string;
+  distanceMiles: number | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -36,12 +37,13 @@ export const DIFFICULTY_LABELS: Record<TrailDifficulty, string> = {
   unknown:  "Unknown",
 };
 
-// Polyline detail only loads below this latitudeDelta
-export const TRAILS_ZOOM_THRESHOLD = 0.8;
+// Polyline detail only loads below this latitudeDelta (~zoom 11)
+export const TRAILS_ZOOM_THRESHOLD = 0.2;
 // Preview pins load below this latitudeDelta — set very high so pins show at any practical zoom
 export const TRAILS_PREVIEW_MAX_ZOOM = 50;
 // Maximum bounding box size sent to Overpass — prevents huge/slow queries
-const MAX_PREVIEW_BBOX_DEG = 5;
+// 1.0° ≈ 70mi — one tile; 48MB maxsize is the sweet spot for dense areas
+const MAX_PREVIEW_BBOX_DEG = 1.0;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -91,17 +93,56 @@ function surfaceLabel(tags: Record<string, string>): string {
   return map[s] ?? s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// ─── Cache ────────────────────────────────────────────────────────────────────
+// ─── Distance helpers ─────────────────────────────────────────────────────────
 
-interface CacheEntry { trails: Trail[]; ts: number }
-const cache = new Map<string, CacheEntry>();
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-
-function cacheKey(s: number, w: number, n: number, e: number): string {
-  return `${s.toFixed(3)},${w.toFixed(3)},${n.toFixed(3)},${e.toFixed(3)}`;
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+function computeDistanceMiles(
+  coords: Array<{ latitude: number; longitude: number }>,
+  tags: Record<string, string>,
+): number | null {
+  // Prefer OSM tag if present (handles out-and-back, loop corrections)
+  const tagVal = tags["distance"] ?? tags["length"];
+  if (tagVal) {
+    const num = parseFloat(tagVal);
+    if (!isNaN(num) && num > 0) {
+      // OSM distance tag is typically in km; convert to miles
+      return Math.round(num * 0.621371 * 10) / 10;
+    }
+  }
+  if (coords.length < 2) return null;
+  let km = 0;
+  for (let i = 1; i < coords.length; i++) {
+    km += haversineKm(
+      coords[i - 1].latitude, coords[i - 1].longitude,
+      coords[i].latitude, coords[i].longitude,
+    );
+  }
+  return km < 0.05 ? null : Math.round(km * 0.621371 * 10) / 10;
+}
+
+// ─── Cache ────────────────────────────────────────────────────────────────────
+
+import { cacheGet, cacheSet, tilesForBbox } from "./spatialCache";
+
+// Trails barely change — 7 days is safe. Recheck on next app open after that.
+const TRAIL_TTL     = 7 * 24 * 60 * 60 * 1000;  // 7 days
+const PREVIEW_TTL   = 3 * 24 * 60 * 60 * 1000;  // 3 days for preview pins
+
+// In-flight dedup — prevent duplicate Overpass requests within a session
+const inFlight = new Set<string>();
+
+function tileKey(s: number, w: number, type: "trail" | "preview"): string {
+  // v2: broadened query to include highway=footway + track with name
+  return `${type}2_${s.toFixed(0)}_${w.toFixed(0)}`;
+}
 
 export interface TrailPreview {
   id: string;
@@ -115,70 +156,173 @@ export interface TrailPreview {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Lightweight preview query — returns only center point of each trail.
- * Fast enough to run at wider zoom levels so users can see where trails exist
- * before zooming in for full polyline geometry.
- * Show at latDelta < 5 (regional zoom).
+ * Fetch preview pins (center points) for trails in a bbox.
+ * Results are cached per 1°×1° tile for 3 days — survives app restarts.
  */
-export async function fetchTrailPreviews(
-  south: number,
-  west: number,
-  north: number,
-  east: number,
+async function _fetchPreviewTile(
+  s: number, w: number, n: number, e: number,
 ): Promise<TrailPreview[]> {
-  // Cap bbox so wide-zoom viewports don't send huge queries to Overpass
-  const latCenter = (south + north) / 2;
-  const lonCenter = (west + east) / 2;
-  const half = MAX_PREVIEW_BBOX_DEG / 2;
-  south  = Math.max(south,  latCenter - half);
-  north  = Math.min(north,  latCenter + half);
-  west   = Math.max(west,   lonCenter - half);
-  east   = Math.min(east,   lonCenter + half);
+  const key = tileKey(s, w, "preview");
+  if (inFlight.has(key)) return [];
 
-  const key = `preview_${cacheKey(south, west, north, east)}`;
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.trails as unknown as TrailPreview[];
+  // L1/L2 cache check
+  const cached = await cacheGet<TrailPreview[]>(key);
+  if (cached) return cached;
 
-  const bbox = `${south},${west},${north},${east}`;
-  // Only natural footpaths — exclude sidewalks, crossings, and farm/service tracks.
-  // Require a name AND at least one of: sac_scale, trail_difficulty, or path-type highway.
-  const query = `
-[out:json][timeout:15][maxsize:4000000];
+  inFlight.add(key);
+  try {
+    const bbox = `${s},${w},${n},${e}`;
+    const query = `
+[out:json][timeout:12][maxsize:48000000];
 (
-  way["highway"="path"]["name"]["footway"!="sidewalk"]["footway"!="crossing"]["access"!="private"](${bbox});
+  way["highway"="path"]["name"]["access"!="private"](${bbox});
   way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
   way["highway"~"^(track|bridleway)$"]["sac_scale"]["access"!="private"](${bbox});
 );
 out center qt 80;
 `.trim();
+    const json = await overpassFetch(query);
+    const previews: TrailPreview[] = (json.elements as any[])
+      .filter((el) => el.center)
+      .map((el) => {
+        const tags: Record<string, string> = el.tags ?? {};
+        const difficulty = difficultyFromTags(tags);
+        return {
+          id: `prev_${el.id}`, name: tags.name ?? "", difficulty,
+          color: DIFFICULTY_COLORS[difficulty],
+          latitude: el.center.lat, longitude: el.center.lon,
+        };
+      })
+      .filter((t) => isRealTrail(t.name));
+    await cacheSet(key, previews, PREVIEW_TTL);
+    return previews;
+  } finally {
+    inFlight.delete(key);
+  }
+}
 
-  const res = await fetch(OVERPASS_BASE, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `data=${encodeURIComponent(query)}`,
-  });
+export async function fetchTrailPreviews(
+  south: number, west: number, north: number, east: number,
+): Promise<TrailPreview[]> {
+  // Cap viewport so we never send a massive query
+  const latCenter = (south + north) / 2;
+  const lonCenter = (west + east) / 2;
+  const half = MAX_PREVIEW_BBOX_DEG / 2;
+  south = Math.max(south, latCenter - half);
+  north = Math.min(north, latCenter + half);
+  west  = Math.max(west,  lonCenter - half);
+  east  = Math.min(east,  lonCenter + half);
 
-  if (!res.ok) throw new Error(`Overpass error: ${res.status}`);
+  // Check which tiles are already cached
+  const tiles = tilesForBbox(south, west, north, east);
+  const cachedResults: TrailPreview[] = [];
+  let allCached = true;
+  for (const t of tiles) {
+    const cached = await cacheGet<TrailPreview[]>(tileKey(t.s, t.w, "preview"));
+    if (cached) {
+      cachedResults.push(...cached);
+    } else {
+      allCached = false;
+    }
+  }
+  if (allCached) {
+    const seen = new Set<string>();
+    return cachedResults.filter((p) => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
+  }
 
-  const json = await res.json();
-  const previews: TrailPreview[] = (json.elements as any[])
-    .filter((el) => el.center)
-    .map((el) => {
-      const tags: Record<string, string> = el.tags ?? {};
-      const difficulty = difficultyFromTags(tags);
-      return {
-        id: `prev_${el.id}`,
-        name: tags.name ?? "",
-        difficulty,
-        color: DIFFICULTY_COLORS[difficulty],
-        latitude: el.center.lat,
-        longitude: el.center.lon,
-      };
-    })
-    .filter((t) => isRealTrail(t.name));
+  // Fetch entire viewport in ONE query (avoids rate limiting)
+  const bbox = `${south},${west},${north},${east}`;
+  const query = `
+[out:json][timeout:12][maxsize:48000000];
+(
+  way["highway"="path"]["name"]["access"!="private"](${bbox});
+  way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
+  way["highway"~"^(track|bridleway)$"]["sac_scale"]["access"!="private"](${bbox});
+);
+out center qt 200;
+`.trim();
+  try {
+    const json = await overpassFetch(query);
+    const previews: TrailPreview[] = (json.elements as any[])
+      .filter((el) => el.center)
+      .map((el) => {
+        const tags: Record<string, string> = el.tags ?? {};
+        const difficulty = difficultyFromTags(tags);
+        return {
+          id: `prev_${el.id}`, name: tags.name ?? "", difficulty,
+          color: DIFFICULTY_COLORS[difficulty],
+          latitude: el.center.lat, longitude: el.center.lon,
+        };
+      })
+      .filter((t) => isRealTrail(t.name));
 
-  cache.set(key, { trails: previews as any, ts: Date.now() });
-  return previews;
+    // Distribute into tile cache for future reuse
+    for (const t of tiles) {
+      const tilePreviews = previews.filter(
+        (p) => p.latitude >= t.s && p.latitude < t.n && p.longitude >= t.w && p.longitude < t.e
+      );
+      await cacheSet(tileKey(t.s, t.w, "preview"), tilePreviews, PREVIEW_TTL);
+    }
+    return previews;
+  } catch {
+    return cachedResults; // return whatever was cached
+  }
+}
+
+/**
+ * Fetch full trail polylines within a bounding box.
+ * Only call when latitudeDelta < TRAILS_ZOOM_THRESHOLD.
+ * Results cached per 1°×1° tile for 7 days — no re-fetch unless tile expires.
+ */
+async function _fetchTrailTile(
+  s: number, w: number, n: number, e: number,
+): Promise<Trail[]> {
+  const key = tileKey(s, w, "trail");
+  if (inFlight.has(key)) return [];
+
+  // L1/L2 cache check
+  const cached = await cacheGet<Trail[]>(key);
+  if (cached) return cached;
+
+  inFlight.add(key);
+  try {
+    const bbox = `${s},${w},${n},${e}`;
+    const query = `
+[out:json][timeout:20][maxsize:128000000];
+(
+  way["highway"="path"]["name"]["footway"!="sidewalk"]["footway"!="crossing"]["access"!="private"](${bbox});
+  way["highway"="footway"]["name"]["footway"!="sidewalk"]["footway"!="crossing"]["access"!="private"](${bbox});
+  way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
+  way["highway"~"^(track|bridleway)$"]["name"]["access"!="private"](${bbox});
+);
+out geom qt 80;
+`.trim();
+    const json = await overpassFetch(query);
+    const trails: Trail[] = (json.elements as any[])
+      .filter((el) => el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2)
+      .map((el) => {
+        const tags: Record<string, string> = el.tags ?? {};
+        const difficulty = difficultyFromTags(tags);
+        const coordinates = (el.geometry as any[]).map((pt) => ({
+          latitude: pt.lat, longitude: pt.lon,
+        }));
+        return {
+          id: String(el.id), name: tags.name ?? "", difficulty,
+          surface: surfaceLabel(tags),
+          dogFriendly: tags.dog === "yes" ? true : tags.dog === "no" ? false : null,
+          fee: tags.fee === "yes" ? true : tags.fee === "no" ? false : null,
+          access: tags.access ?? null,
+          coordinates,
+          color: DIFFICULTY_COLORS[difficulty],
+          distanceMiles: computeDistanceMiles(coordinates, tags),
+        };
+      })
+      .filter((t) => isRealTrail(t.name));
+    await cacheSet(key, trails, TRAIL_TTL);
+    return trails;
+  } finally {
+    inFlight.delete(key);
+  }
 }
 
 /**
@@ -191,56 +335,101 @@ export async function fetchTrails(
   north: number,
   east: number,
 ): Promise<Trail[]> {
-  const key = cacheKey(south, west, north, east);
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.trails;
+  // Cap bbox to 2° max before splitting into tiles
+  const MAX_TRAIL_DEG = 2.0;
+  const midLat = (south + north) / 2;
+  const midLon = (west + east) / 2;
+  south = Math.max(south, midLat - MAX_TRAIL_DEG / 2);
+  north = Math.min(north, midLat + MAX_TRAIL_DEG / 2);
+  west  = Math.max(west,  midLon - MAX_TRAIL_DEG / 2);
+  east  = Math.min(east,  midLon + MAX_TRAIL_DEG / 2);
 
-  const bbox = `${south},${west},${north},${east}`;
+  const tiles = tilesForBbox(south, west, north, east);
+  const results = await Promise.all(tiles.map((t) => _fetchTrailTile(t.s, t.w, t.n, t.e)));
 
-  // Only natural footpaths with known difficulty — excludes sidewalks, farm tracks,
-  // private access roads, and any way that isn't explicitly a hiking/nature trail.
-  const query = `
-[out:json][timeout:20][maxsize:16000000];
-(
-  way["highway"="path"]["name"]["footway"!="sidewalk"]["footway"!="crossing"]["access"!="private"](${bbox});
-  way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
-  way["highway"~"^(track|bridleway)$"]["sac_scale"]["access"!="private"](${bbox});
-);
-out geom qt 80;
-`.trim();
-
-  const res = await fetch(OVERPASS_BASE, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `data=${encodeURIComponent(query)}`,
+  // Deduplicate trails that span tile boundaries
+  const seen = new Set<string>();
+  return results.flat().filter((trail) => {
+    if (seen.has(trail.id)) return false;
+    seen.add(trail.id);
+    return true;
   });
+}
 
-  if (!res.ok) throw new Error(`Overpass error: ${res.status}`);
+// ─── Single trail detail (on-tap enrichment) ─────────────────────────────────
 
-  const json = await res.json();
+export interface TrailDetail {
+  id: string;
+  name: string;
+  difficulty: TrailDifficulty;
+  surface: string;
+  dogFriendly: boolean | null;
+  fee: boolean | null;
+  access: string | null;
+  color: string;
+  distanceMiles: number | null;
+  description: string | null;
+  website: string | null;
+  operator: string | null;
+  wheelchair: boolean | null;
+  lit: boolean | null;
+  incline: string | null;
+  mtbScale: string | null;
+  openingHours: string | null;
+  coordinates: Array<{ latitude: number; longitude: number }>;
+}
 
-  const trails: Trail[] = (json.elements as any[])
-    .filter((el) => el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2)
-    .map((el) => {
-      const tags: Record<string, string> = el.tags ?? {};
-      const difficulty = difficultyFromTags(tags);
-      return {
-        id: String(el.id),
-        name: tags.name ?? "",
-        difficulty,
-        surface: surfaceLabel(tags),
-        dogFriendly: tags.dog === "yes" ? true : tags.dog === "no" ? false : null,
-        fee: tags.fee === "yes" ? true : tags.fee === "no" ? false : null,
-        access: tags.access ?? null,
-        coordinates: (el.geometry as any[]).map((pt) => ({
-          latitude: pt.lat,
-          longitude: pt.lon,
-        })),
-        color: DIFFICULTY_COLORS[difficulty],
-      };
-    })
-    .filter((t) => isRealTrail(t.name));
+const _detailCache = new Map<string, TrailDetail>();
 
-  cache.set(key, { trails, ts: Date.now() });
-  return trails;
+/**
+ * Fetch full detail for a single trail way by its OSM ID.
+ * Used when user taps a preview pin — returns all available OSM tags + geometry.
+ */
+export async function fetchTrailDetail(previewId: string): Promise<TrailDetail | null> {
+  // Strip "prev_" prefix to get the raw OSM way ID
+  const wayId = previewId.replace(/^prev_/, "");
+
+  if (_detailCache.has(wayId)) return _detailCache.get(wayId)!;
+
+  try {
+    const query = `
+[out:json][timeout:10][maxsize:8000000];
+way(${wayId});
+out geom;
+`.trim();
+    const json = await overpassFetch(query);
+    const el = json.elements?.[0];
+    if (!el || !el.tags) return null;
+
+    const tags: Record<string, string> = el.tags;
+    const difficulty = difficultyFromTags(tags);
+    const coordinates = Array.isArray(el.geometry)
+      ? (el.geometry as any[]).map((pt: any) => ({ latitude: pt.lat, longitude: pt.lon }))
+      : [];
+
+    const detail: TrailDetail = {
+      id: wayId,
+      name: tags.name ?? "Unnamed Trail",
+      difficulty,
+      surface: surfaceLabel(tags),
+      dogFriendly: tags.dog === "yes" ? true : tags.dog === "no" ? false : null,
+      fee: tags.fee === "yes" ? true : tags.fee === "no" ? false : null,
+      access: tags.access ?? null,
+      color: DIFFICULTY_COLORS[difficulty],
+      distanceMiles: computeDistanceMiles(coordinates, tags),
+      description: tags.description ?? tags.note ?? null,
+      website: tags.website ?? tags["contact:website"] ?? tags.url ?? null,
+      operator: tags.operator ?? null,
+      wheelchair: tags.wheelchair === "yes" ? true : tags.wheelchair === "no" ? false : null,
+      lit: tags.lit === "yes" ? true : tags.lit === "no" ? false : null,
+      incline: tags.incline ?? null,
+      mtbScale: tags["mtb:scale"] ?? null,
+      openingHours: tags.opening_hours ?? null,
+      coordinates,
+    };
+    _detailCache.set(wayId, detail);
+    return detail;
+  } catch {
+    return null;
+  }
 }

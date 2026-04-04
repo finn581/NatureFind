@@ -1,3 +1,11 @@
+export interface ActivitySearchConfig {
+  googleTypes: string[];
+  keyword: string | null;
+  sectionTitle: string;
+  emptyMessage: string;
+  icon: string;
+}
+
 export interface ActivityConfig {
   name: string;
   icon: string;
@@ -7,7 +15,8 @@ export interface ActivityConfig {
   description: string;
   tips: string[];
   bestSeason: string;
-  photo: string | number;
+  photo: string;
+  searchConfig: ActivitySearchConfig;
 }
 
 export const ACTIVITY_LIST: ActivityConfig[] = [
@@ -19,13 +28,20 @@ export const ACTIVITY_LIST: ActivityConfig[] = [
     accentColor: "#52b788",
     description: "Explore thousands of trails across America's wild places",
     tips: [
-      "Start early to avoid crowds and midday heat",
-      "Carry at least 2L of water per person for day hikes",
-      "Tell someone your planned route and return time",
-      "Download offline maps before heading out",
+      "Break in new boots before hitting the trail",
+      "Start early to avoid afternoon heat and storms",
+      "Follow Leave No Trace principles",
+      "Carry the 10 essentials on every hike",
     ],
     bestSeason: "Spring & Fall",
-    photo: "https://images.unsplash.com/photo-1551632811-561732d1e306?w=600&q=80&fit=crop",
+    photo: "https://images.unsplash.com/photo-1759504744184-fca96a8e99d0?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: [],
+      keyword: "hiking trails trailhead",
+      sectionTitle: "Nearby Hiking Trails",
+      emptyMessage: "No hiking trails found nearby",
+      icon: "walk",
+    },
   },
   {
     name: "Camping",
@@ -35,13 +51,20 @@ export const ACTIVITY_LIST: ActivityConfig[] = [
     accentColor: "#f59e0b",
     description: "Sleep under the stars at iconic campgrounds nationwide",
     tips: [
-      "Reserve sites months in advance for popular parks",
-      "Check fire regulations — bans change seasonally",
-      "Store food in bear boxes or hang it 10 feet high",
-      "Leave no trace — pack out everything you pack in",
+      "Test your gear at home before the trip",
+      "Store food in bear canisters where required",
+      "Arrive before dark to set up camp",
+      "Check fire restrictions before building a campfire",
     ],
     bestSeason: "Summer & Fall",
-    photo: "https://images.unsplash.com/photo-1504280390367-361c6d9f38f4?w=600&q=80&fit=crop",
+    photo: "https://images.unsplash.com/photo-1747763709371-8cf6d91a2623?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: ["campground"],
+      keyword: null,
+      sectionTitle: "Nearby Campgrounds",
+      emptyMessage: "No campgrounds found nearby",
+      icon: "bonfire",
+    },
   },
   {
     name: "Fishing",
@@ -51,60 +74,111 @@ export const ACTIVITY_LIST: ActivityConfig[] = [
     accentColor: "#5dade2",
     description: "Cast a line in pristine rivers, lakes, and coastlines",
     tips: [
-      "A federal fishing license is required in most parks",
-      "Many park waters are catch & release only — check local rules",
-      "Fly fishing thrives in cold mountain streams like in Yellowstone",
-      "Early morning and late evening are prime bite windows",
+      "Check local regulations and obtain permits",
+      "Dawn and dusk are peak feeding times",
+      "Match your lure to local baitfish",
+      "Practice catch-and-release when possible",
     ],
     bestSeason: "Spring & Summer",
-    photo: require("../assets/images/fishing.jpeg"),
+    photo: "https://images.unsplash.com/photo-1724514415178-c87e1d00acd0?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: [],
+      keyword: "fishing spot bait tackle",
+      sectionTitle: "Nearby Fishing Spots",
+      emptyMessage: "No fishing spots found nearby",
+      icon: "water",
+    },
   },
   {
-    name: "Wildlife Watching",
-    icon: "paw",
-    color: "#7d5a0e",
-    darkColor: "#4d3808",
-    accentColor: "#f0c419",
-    description: "Spot bears, wolves, elk, and rare birds in their habitat",
+    name: "Golf",
+    icon: "golf",
+    color: "#166534",
+    darkColor: "#0d3d1f",
+    accentColor: "#4ade80",
+    description: "Find golf courses near parks and scenic destinations",
     tips: [
-      "Dawn and dusk offer the best wildlife activity windows",
-      "Maintain at least 100 yards distance from bears and wolves",
-      "Bring binoculars or a spotting scope for safe observation",
-      "Move slowly, stay quiet, and position yourself downwind",
+      "Book tee times in advance, especially on weekends",
+      "Check the dress code before arriving at the course",
+      "Repair your divots and ball marks on the green",
+      "Stay hydrated and wear sunscreen on the course",
     ],
-    bestSeason: "Year Round",
-    photo: "https://images.unsplash.com/photo-1474511320723-9a56873867b5?w=600&q=80&fit=crop",
+    bestSeason: "Spring & Summer",
+    photo: "https://images.unsplash.com/photo-1768396747921-5a18367415d2?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: ["golf_course"],
+      keyword: null,
+      sectionTitle: "Nearby Golf Courses",
+      emptyMessage: "No golf courses found nearby",
+      icon: "golf",
+    },
   },
   {
-    name: "Stargazing",
-    icon: "moon",
-    color: "#2e1760",
-    darkColor: "#180c36",
-    accentColor: "#a78bfa",
-    description: "Experience the darkest, most stunning skies in North America",
+    name: "Boating & Jet Skiing",
+    icon: "boat",
+    color: "#0c4a6e",
+    darkColor: "#082f49",
+    accentColor: "#0ea5e9",
+    description: "Hit the water at marinas, lakes, and coastal launches",
     tips: [
-      "Plan visits around new moon phases for the darkest skies",
-      "Allow 20–30 minutes for your eyes to fully dark-adapt",
-      "Use a red flashlight — it preserves your night vision",
-      "International Dark Sky Parks like Cherry Springs offer certified darkness",
+      "Always wear a life jacket — it's the law in most states",
+      "Check weather and water conditions before heading out",
+      "Follow no-wake zones and posted speed limits",
+      "File a float plan with someone on shore",
     ],
-    bestSeason: "Winter & Fall",
-    photo: "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=600&q=80&fit=crop",
+    bestSeason: "Summer",
+    photo: "https://images.unsplash.com/photo-1648484983838-b47185140bee?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: ["marina"],
+      keyword: "boat rental jet ski",
+      sectionTitle: "Nearby Marinas & Boat Rentals",
+      emptyMessage: "No marinas found nearby",
+      icon: "boat",
+    },
   },
   {
-    name: "Climbing",
-    icon: "flag",
-    color: "#7b241c",
-    darkColor: "#4e1610",
-    accentColor: "#f87171",
-    description: "Scale granite walls and sandstone towers across the American West",
+    name: "Kayaking",
+    icon: "boat",
+    color: "#155e75",
+    darkColor: "#0c3d4f",
+    accentColor: "#38bdf8",
+    description: "Paddle crystal-clear rivers, lakes, and coastal waterways",
     tips: [
-      "Check for seasonal route closures during raptor nesting season",
-      "Yosemite, Zion, and Joshua Tree are world-class destinations",
-      "Hire a certified guide for your first multi-pitch routes",
-      "Always leave fixed gear in good condition for the next party",
+      "Always wear a PFD (life jacket)",
+      "Check water conditions and weather before launch",
+      "Learn to self-rescue before going out alone",
+      "Dress for the water temperature, not the air",
     ],
-    bestSeason: "Spring & Fall",
-    photo: "https://images.unsplash.com/photo-1522163182402-834f871fd851?w=600&q=80&fit=crop",
+    bestSeason: "Summer & Fall",
+    photo: "https://images.unsplash.com/photo-1769197047973-265783a7f1f4?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: [],
+      keyword: "kayak rental canoe paddleboard",
+      sectionTitle: "Nearby Kayak & Paddle Rentals",
+      emptyMessage: "No kayak rentals found nearby",
+      icon: "boat",
+    },
+  },
+  {
+    name: "Mountain Biking",
+    icon: "bicycle",
+    color: "#713f12",
+    darkColor: "#451f06",
+    accentColor: "#fb923c",
+    description: "Shred singletrack through forests, deserts, and mountain passes",
+    tips: [
+      "Wear a helmet — always, no exceptions",
+      "Start with green trails and work up",
+      "Yield to hikers and horses on shared trails",
+      "Check tire pressure before every ride",
+    ],
+    bestSeason: "Summer & Fall",
+    photo: "https://images.unsplash.com/photo-1677002080216-052df311712c?w=600&q=80&fit=crop",
+    searchConfig: {
+      googleTypes: [],
+      keyword: "mountain bike trails bike park",
+      sectionTitle: "Nearby Mountain Bike Trails",
+      emptyMessage: "No mountain bike trails found nearby",
+      icon: "bicycle",
+    },
   },
 ];

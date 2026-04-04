@@ -4,6 +4,7 @@ import {
   onAuthStateChanged,
   signInWithGoogle,
   signInWithApple,
+  signInWithEmail as fbSignInWithEmail,
   signOut as fbSignOut,
 } from "@/services/firebase";
 
@@ -19,6 +20,7 @@ type AuthAction =
 interface AuthContextValue extends AuthState {
   signInGoogle: (idToken: string) => Promise<void>;
   signInApple: (idToken: string, nonce: string) => Promise<void>;
+  signInEmail: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -55,12 +57,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await signInWithApple(idToken, nonce);
   };
 
+  const signInEmail = async (email: string, password: string) => {
+    dispatch({ type: "SET_LOADING", loading: true });
+    await fbSignInWithEmail(email, password);
+  };
+
   const signOut = async () => {
     await fbSignOut();
   };
 
   return (
-    <AuthContext.Provider value={{ ...state, signInGoogle, signInApple, signOut }}>
+    <AuthContext.Provider value={{ ...state, signInGoogle, signInApple, signInEmail, signOut }}>
       {children}
     </AuthContext.Provider>
   );

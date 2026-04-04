@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -12,10 +12,14 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors } from "@/constants/Colors";
 import { ACTIVITY_LIST } from "@/constants/Activities";
+import { useSubscription } from "@/context/SubscriptionContext";
+import TripPlanner from "@/components/TripPlanner";
 
 export default function ActivitiesTab() {
   const router = useRouter();
   const { width } = useWindowDimensions();
+  const { isPro, gateFeature } = useSubscription();
+  const [showTripPlanner, setShowTripPlanner] = useState(false);
   const numColumns = width >= 768 ? 3 : 2;
   const gap = 12;
   const horizontalPad = 16;
@@ -42,6 +46,29 @@ export default function ActivitiesTab() {
           Find the best parks and locations for your favorite outdoor pursuits
         </Text>
       </View>
+
+      {/* AI Trip Planner CTA */}
+      <Pressable
+        style={styles.tripPlannerBtn}
+        onPress={() => {
+          if (gateFeature("Unlock AI Trip Planner")) return;
+          setShowTripPlanner(true);
+        }}
+      >
+        <View style={styles.tripPlannerIcon}>
+          <Ionicons name="sparkles" size={22} color="#fff" />
+        </View>
+        <View style={styles.tripPlannerText}>
+          <Text style={styles.tripPlannerTitle}>AI Trip Planner</Text>
+          <Text style={styles.tripPlannerSub}>Tell us your dates and we'll build the perfect trip</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
+      </Pressable>
+
+      <TripPlanner
+        visible={showTripPlanner}
+        onClose={() => setShowTripPlanner(false)}
+      />
 
       <View style={[styles.grid, { paddingHorizontal: horizontalPad, gap }]}>
         {ACTIVITY_LIST.map((activity) => (
@@ -156,6 +183,29 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: 0.2,
   },
+  tripPlannerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: Colors.primary + "15",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.primary + "40",
+    padding: 16,
+  },
+  tripPlannerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tripPlannerText: { flex: 1 },
+  tripPlannerTitle: { color: Colors.text, fontSize: 16, fontWeight: "700" },
+  tripPlannerSub: { color: Colors.textSecondary, fontSize: 12, marginTop: 2 },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",

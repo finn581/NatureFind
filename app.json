@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.finn581.parkfinder",
-      "buildNumber": "22",
+      "buildNumber": "55",
       "entitlements": {
         "com.apple.developer.applesignin": [
           "Default"
@@ -27,7 +27,15 @@
         "NSPhotoLibraryUsageDescription": "NatureFind needs access to your photos to attach them to reviews.",
         "NSPhotoLibraryAddUsageDescription": "NatureFind saves selected photos for your review.",
         "NSCameraUsageDescription": "NatureFind uses your camera to photograph wildlife sightings.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "MBXAccessToken": "pk.eyJ1IjoiZmlubnk2MTkiLCJhIjoiY21taTYzZHhxMDhpbzJxcTRxMDFuZW82aSJ9._JSEGDLmBGvl-7sB375Kbg",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "com.googleusercontent.apps.1063234127083-o4bs0m1dcpsfs05953lpd0k8nn17dlc3"
+            ]
+          }
+        ]
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
@@ -59,6 +67,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withRnmapboxFix",
       "expo-router",
       "expo-web-browser",
       [
@@ -72,6 +81,15 @@
         "expo-image-picker",
         {
           "photosPermission": "NatureFind needs access to your photos to attach them to reviews."
+        }
+      ],
+      "react-native-iap",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
         }
       ]
     ],

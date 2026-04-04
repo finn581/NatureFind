@@ -72,16 +72,19 @@ export default function ActivityResultsScreen() {
       setError(false);
 
       let stateCode: string | undefined;
+      let lat: number | undefined;
+      let lon: number | undefined;
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted") {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
           });
-          const { latitude, longitude } = loc.coords;
-          setUserLocation({ lat: latitude, lon: longitude });
+          lat = loc.coords.latitude;
+          lon = loc.coords.longitude;
+          setUserLocation({ lat, lon });
 
-          const [geo] = await Location.reverseGeocodeAsync({ latitude, longitude });
+          const [geo] = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
           if (geo?.region) {
             stateCode = STATE_NAME_TO_CODE[geo.region] ?? undefined;
             setDetectedState(stateCode);
@@ -91,15 +94,15 @@ export default function ActivityResultsScreen() {
         // Location unavailable — fall back to nationwide
       }
 
-      await loadParks(stateCode);
+      await loadParks(stateCode, lat, lon);
     })();
   }, [name]);
 
-  async function loadParks(stateCode?: string) {
+  async function loadParks(stateCode?: string, lat?: number, lon?: number) {
     setLoading(true);
     setError(false);
     try {
-      const data = await fetchParksByActivity(name!, stateCode);
+      const data = await fetchParksByActivity(name!, stateCode, lat, lon);
       setParks(data.filter((p) => p.latitude && p.longitude));
     } catch {
       setError(true);
@@ -143,16 +146,25 @@ export default function ActivityResultsScreen() {
       <FlatList
         data={sortedParks}
         keyExtractor={(item) => item.id}
-        renderItem={({ item, index }) => (
+        renderItem={({ item, index }) => {
+          const dist = userLocation
+            ? getDistanceMiles(userLocation.lat, userLocation.lon, parseFloat(item.latitude), parseFloat(item.longitude))
+            : null;
+          return (
           <View>
             {index === 0 && userLocation && (
               <Text style={styles.sortLabel}>
                 Sorted by distance from your location
               </Text>
             )}
+            {dist != null && (
+              <Text style={styles.distLabel}>
+                {dist < 1 ? "< 1 mi away" : `${Math.round(dist)} mi away`}
+              </Text>
+            )}
             <ParkCard park={item} />
           </View>
-        )}
+        );}}
         ListHeaderComponent={
           <>
             {/* Hero */}
@@ -257,7 +269,7 @@ export default function ActivityResultsScreen() {
                     styles.retryBtn,
                     { backgroundColor: activity.color },
                   ]}
-                  onPress={() => loadParks(detectedState)}
+                  onPress={() => loadParks(detectedState, userLocation?.lat, userLocation?.lon)}
                 >
                   <Text style={styles.retryText}>Try Again</Text>
                 </Pressable>
@@ -400,6 +412,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingVertical: 6,
     fontStyle: "italic",
+  },
+  distLabel: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "500",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 2,
   },
   loadingWrap: {
     alignItems: "center",

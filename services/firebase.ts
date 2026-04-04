@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   getAuth,
   signInWithCredential,
+  signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   GoogleAuthProvider,
@@ -12,6 +13,7 @@ import {
 import {
   getFirestore,
   collection,
+  collectionGroup,
   doc,
   getDoc,
   setDoc,
@@ -24,6 +26,7 @@ import {
   limit as fsLimit,
   serverTimestamp,
   Timestamp,
+  getCountFromServer,
 } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { firebaseConfig } from "@/firebaseConfig";
@@ -50,6 +53,10 @@ export async function signInWithApple(idToken: string, nonce: string) {
   const provider = new OAuthProvider("apple.com");
   const credential = provider.credential({ idToken, rawNonce: nonce });
   return signInWithCredential(auth, credential);
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  return signInWithEmailAndPassword(auth, email, password);
 }
 
 export async function signOut() {
@@ -297,4 +304,276 @@ export async function saveCampgroundContribution(
     { ...data, contributedBy: displayName, contributedAt: serverTimestamp() },
     { merge: true }
   );
+}
+
+// --- Firestore: Condition Reports ---
+
+export interface ConditionReportDoc {
+  id?: string;
+  uid: string;
+  displayName: string;
+  trailStatus: "open" | "partial" | "closed" | "unknown";
+  wildlifeActivity: "high" | "moderate" | "low" | "none";
+  crowding: "empty" | "light" | "moderate" | "crowded";
+  accessNotes: string;
+  createdAt: Timestamp;
+}
+
+function conditionReportsCol(parkCode: string) {
+  return collection(db, "parks", parkCode, "conditionReports");
+}
+
+export async function addConditionReport(
+  parkCode: string,
+  report: Omit<ConditionReportDoc, "createdAt" | "id">
+): Promise<void> {
+  await addDoc(conditionReportsCol(parkCode), { ...report, createdAt: serverTimestamp() });
+}
+
+export async function getConditionReports(
+  parkCode: string,
+  limitCount = 5
+): Promise<ConditionReportDoc[]> {
+  const q = query(conditionReportsCol(parkCode), orderBy("createdAt", "desc"), fsLimit(limitCount));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ConditionReportDoc));
+}
+
+// --- Firestore: User Stats ---
+
+export async function countFavorites(uid: string): Promise<number> {
+  try {
+    const snap = await getCountFromServer(favoritesCol(uid));
+    return snap.data().count;
+  } catch {
+    return 0;
+  }
+}
+
+export async function countUserReviews(uid: string): Promise<number> {
+  try {
+    const q = query(collectionGroup(db, "reviews"), where("uid", "==", uid));
+    const snap = await getCountFromServer(q);
+    return snap.data().count;
+  } catch {
+    return 0;
+  }
+}
+
+export async function countUserSightings(uid: string): Promise<number> {
+  try {
+    const q = query(sightingsTopCol(), where("userId", "==", uid));
+    const snap = await getCountFromServer(q);
+    return snap.data().count;
+  } catch {
+    return 0;
+  }
+}
+
+// --- Firestore: Visit Tracking ---
+
+function visitsCol(uid: string) {
+  return collection(db, "users", uid, "visits");
+}
+
+export async function logVisit(uid: string, parkCode: string, parkName: string): Promise<void> {
+  await setDoc(
+    doc(visitsCol(uid), parkCode),
+    { parkCode, parkName, lastVisited: serverTimestamp() },
+    { merge: true }
+  );
+}
+
+export async function countVisits(uid: string): Promise<number> {
+  try {
+    const snap = await getCountFromServer(visitsCol(uid));
+    return snap.data().count;
+  } catch {
+    return 0;
+  }
+}
+
+export async function getRecentVisits(uid: string, limitCount = 5): Promise<{ parkCode: string; parkName: string; lastVisited: Timestamp }[]> {
+  try {
+    const q = query(visitsCol(uid), orderBy("lastVisited", "desc"), fsLimit(limitCount));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => d.data() as any);
+  } catch {
+    return [];
+  }
+}
+
+// --- Firestore: Community Posts ---
+
+export interface CommunityPost {
+  id?: string;
+  uid: string;
+  displayName: string;
+  photoUrl: string;
+  caption: string;
+  parkCode?: string;
+  parkName?: string;
+  likeCount: number;
+  commentCount: number;
+  createdAt: Timestamp;
+}
+
+export interface CommunityComment {
+  id?: string;
+  uid: string;
+  displayName: string;
+  text: string;
+  createdAt: Timestamp;
+}
+
+const communityCol = () => collection(db, "community");
+
+function communityCommentsCol(postId: string) {
+  return collection(db, "community", postId, "comments");
+}
+
+function communityLikesCol(postId: string) {
+  return collection(db, "community", postId, "likes");
+}
+
+export async function addCommunityPost(
+  post: Omit<CommunityPost, "createdAt" | "id" | "likeCount" | "commentCount">
+): Promise<string> {
+  const docRef = await addDoc(communityCol(), {
+    ...post,
+    likeCount: 0,
+    commentCount: 0,
+    createdAt: serverTimestamp(),
+  });
+  return docRef.id;
+}
+
+export async function getCommunityPosts(limitCount = 30): Promise<CommunityPost[]> {
+  const q = query(communityCol(), orderBy("createdAt", "desc"), fsLimit(limitCount));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CommunityPost));
+}
+
+export async function toggleCommunityLike(postId: string, uid: string): Promise<boolean> {
+  const likeRef = doc(communityLikesCol(postId), uid);
+  const postRef = doc(db, "community", postId);
+  const snap = await getDoc(likeRef);
+  if (snap.exists()) {
+    await deleteDoc(likeRef);
+    const postSnap = await getDoc(postRef);
+    const current = (postSnap.data()?.likeCount ?? 1) as number;
+    await setDoc(postRef, { likeCount: Math.max(0, current - 1) }, { merge: true });
+    return false;
+  } else {
+    await setDoc(likeRef, { uid, likedAt: serverTimestamp() });
+    const postSnap = await getDoc(postRef);
+    const current = (postSnap.data()?.likeCount ?? 0) as number;
+    await setDoc(postRef, { likeCount: current + 1 }, { merge: true });
+    return true;
+  }
+}
+
+export async function hasLikedPost(postId: string, uid: string): Promise<boolean> {
+  const snap = await getDoc(doc(communityLikesCol(postId), uid));
+  return snap.exists();
+}
+
+export async function addCommunityComment(
+  postId: string,
+  comment: Omit<CommunityComment, "createdAt" | "id">
+): Promise<void> {
+  await addDoc(communityCommentsCol(postId), { ...comment, createdAt: serverTimestamp() });
+  const postRef = doc(db, "community", postId);
+  const postSnap = await getDoc(postRef);
+  const current = (postSnap.data()?.commentCount ?? 0) as number;
+  await setDoc(postRef, { commentCount: current + 1 }, { merge: true });
+}
+
+export async function getCommunityComments(postId: string): Promise<CommunityComment[]> {
+  const q = query(communityCommentsCol(postId), orderBy("createdAt", "asc"), fsLimit(50));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CommunityComment));
+}
+
+export async function uploadCommunityPhoto(uid: string, localUri: string): Promise<string> {
+  const resp = await fetch(localUri);
+  const blob = await resp.blob();
+  const path = `community/${uid}/${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
+  await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+  return getDownloadURL(storageRef);
+}
+
+export async function reportCommunityPost(
+  postId: string,
+  reporterUid: string,
+  reason: string
+): Promise<void> {
+  await addDoc(collection(db, "reports"), {
+    type: "community_post",
+    postId,
+    reporterUid,
+    reason,
+    createdAt: serverTimestamp(),
+  });
+}
+
+// --- Firestore: Unified Activity Feed Queries ---
+
+/** Recent reviews across ALL parks (collectionGroup). */
+export async function getRecentReviewsFeed(
+  limitCount = 12
+): Promise<(ReviewDoc & { parkCode: string })[]> {
+  try {
+    const q = query(
+      collectionGroup(db, "reviews"),
+      orderBy("createdAt", "desc"),
+      fsLimit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+      parkCode: d.ref.parent.parent?.id ?? "",
+    } as ReviewDoc & { parkCode: string }));
+  } catch {
+    return []; // collectionGroup index may not exist yet — non-fatal
+  }
+}
+
+/** Recent condition reports across ALL parks (collectionGroup). */
+export async function getRecentConditionReportsFeed(
+  limitCount = 8
+): Promise<(ConditionReportDoc & { parkCode: string })[]> {
+  try {
+    const q = query(
+      collectionGroup(db, "conditionReports"),
+      orderBy("createdAt", "desc"),
+      fsLimit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+      parkCode: d.ref.parent.parent?.id ?? "",
+    } as ConditionReportDoc & { parkCode: string }));
+  } catch {
+    return [];
+  }
+}
+
+/** Delete a community post and its subcollections. */
+export async function deleteCommunityPost(postId: string, photoUrl?: string): Promise<void> {
+  // Delete comments subcollection
+  const commentsSnap = await getDocs(communityCommentsCol(postId));
+  await Promise.allSettled(commentsSnap.docs.map((d) => deleteDoc(d.ref)));
+  // Delete likes subcollection
+  const likesSnap = await getDocs(communityLikesCol(postId));
+  await Promise.allSettled(likesSnap.docs.map((d) => deleteDoc(d.ref)));
+  // Delete the post
+  await deleteDoc(doc(db, "community", postId));
+  // Delete the photo from storage
+  if (photoUrl) {
+    try { await deleteObject(ref(storage, photoUrl)); } catch {}
+  }
 }
