@@ -84,6 +84,7 @@
         }
       ],
       "react-native-iap",
+      "./plugins/withWidgetExtension",
       [
         "expo-build-properties",
         {
