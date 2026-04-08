@@ -1102,18 +1102,20 @@ export default function MapTab() {
   }, [campgrounds]);
 
   const handleTrailPreviewPress = useCallback((e: any) => {
+    if (currentRegion === "sa" && gateFeature("Explore South America Trails")) return;
     const id = e.features?.[0]?.properties?.id;
     if (!id) return;
     const preview = trailPreviews.find((p) => p.id === String(id));
     if (preview) setSelectedTrailPreview(preview);
-  }, [trailPreviews]);
+  }, [trailPreviews, currentRegion]);
 
   const handleTrailLabelPress = useCallback((e: any) => {
+    if (currentRegion === "sa" && gateFeature("Explore South America Trails")) return;
     const id = e.features?.[0]?.properties?.id;
     if (!id) return;
     const trail = trails.find((t) => t.id === String(id));
     if (trail) setSelectedTrail(trail);
-  }, [trails]);
+  }, [trails, currentRegion]);
 
   const handleClusterPress = useCallback((e: any) => {
     const props = e.features?.[0]?.properties;
@@ -1341,6 +1343,7 @@ export default function MapTab() {
             id="trails-src"
             shape={trailsGeoJSON}
             onPress={(e: any) => {
+              if (currentRegion === "sa" && gateFeature("Explore South America Trails")) return;
               const f = e.features?.[0];
               if (!f) return;
               const trail = trails.find(
@@ -2018,7 +2021,7 @@ export default function MapTab() {
                         <View>
                           <Text style={styles.trailDetailLabel}>Distance</Text>
                           <Text style={styles.trailDetailValue}>
-                            {selectedTrail.distanceMiles} mi
+                            {formatDistance(selectedTrail.distanceMiles! * 1609.34, currentRegion)}
                           </Text>
                         </View>
                       </View>
@@ -2102,16 +2105,16 @@ export default function MapTab() {
                         <View style={styles.elevationStats}>
                           <View style={styles.elevationStat}>
                             <Ionicons name="arrow-up" size={12} color="#22c55e" />
-                            <Text style={styles.elevationStatText}>{elev.totalGain} ft gain</Text>
+                            <Text style={styles.elevationStatText}>{formatElevation(elev.totalGain / 3.28084, currentRegion)} gain</Text>
                           </View>
                           <View style={styles.elevationStat}>
                             <Ionicons name="arrow-down" size={12} color="#ef4444" />
-                            <Text style={styles.elevationStatText}>{elev.totalLoss} ft loss</Text>
+                            <Text style={styles.elevationStatText}>{formatElevation(elev.totalLoss / 3.28084, currentRegion)} loss</Text>
                           </View>
                           <View style={styles.elevationStat}>
                             <Ionicons name="trending-up" size={12} color={Colors.textSecondary} />
                             <Text style={styles.elevationStatText}>
-                              {elev.minElevation}–{elev.maxElevation} ft
+                              {formatElevation(elev.minElevation / 3.28084, currentRegion)}–{formatElevation(elev.maxElevation / 3.28084, currentRegion)}
                             </Text>
                           </View>
                         </View>
@@ -2149,7 +2152,7 @@ export default function MapTab() {
                   title="Full Trail Details"
                   emoji="🥾"
                   accentColor={selectedTrail.color}
-                  statLine={selectedTrail.distanceMiles != null ? `${selectedTrail.distanceMiles} mi · ${DIFFICULTY_LABELS[selectedTrail.difficulty]}` : undefined}
+                  statLine={selectedTrail.distanceMiles != null ? `${formatDistance(selectedTrail.distanceMiles * 1609.34, currentRegion)} · ${DIFFICULTY_LABELS[selectedTrail.difficulty]}` : undefined}
                   bullets={[
                     "Route drawn on map",
                     "Elevation profile with gain/loss",
@@ -2819,7 +2822,7 @@ export default function MapTab() {
                   {selectedPoi.elevation && (
                     <View style={[styles.difficultyBadge, { backgroundColor: "#78716c" }]}>
                       <Text style={styles.difficultyBadgeText}>
-                        {Math.round(parseFloat(selectedPoi.elevation) * 3.281)}ft
+                        {formatElevation(parseFloat(selectedPoi.elevation), currentRegion)}
                       </Text>
                     </View>
                   )}
@@ -2966,7 +2969,7 @@ export default function MapTab() {
                     </View>
                     {td?.distanceMiles != null && (
                       <Text style={{ color: Colors.textSecondary, fontSize: 13, marginLeft: 8 }}>
-                        {td.distanceMiles} mi
+                        {formatDistance(td.distanceMiles * 1609.34, currentRegion)}
                       </Text>
                     )}
                   </View>
@@ -3040,7 +3043,7 @@ export default function MapTab() {
                       <View style={styles.infoRow}>
                         <Ionicons name="resize-outline" size={16} color={Colors.textSecondary} />
                         <Text style={styles.infoLabel}>Distance</Text>
-                        <Text style={styles.infoValue}>{td.distanceMiles} miles</Text>
+                        <Text style={styles.infoValue}>{formatDistance(td.distanceMiles * 1609.34, currentRegion)}</Text>
                       </View>
                     )}
                     <View style={styles.infoRow}>
