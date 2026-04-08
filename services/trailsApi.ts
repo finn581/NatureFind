@@ -63,6 +63,13 @@ function difficultyFromTags(tags: Record<string, string>): TrailDifficulty {
     if (/^(hard|difficult|black)/i.test(td)) return "hard";
     if (/^(expert|extreme|double.?black)/i.test(td)) return "expert";
   }
+  // Fallback: tracktype (common in SA)
+  const tt = tags.tracktype;
+  if (tt) {
+    if (tt === "grade1" || tt === "grade2") return "easy";
+    if (tt === "grade3") return "moderate";
+    if (tt === "grade4" || tt === "grade5") return "hard";
+  }
   return "unknown";
 }
 
@@ -178,6 +185,7 @@ async function _fetchPreviewTile(
   way["highway"="path"]["name"]["access"!="private"](${bbox});
   way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
   way["highway"~"^(track|bridleway)$"]["sac_scale"]["access"!="private"](${bbox});
+  way["highway"="track"]["tracktype"~"^(grade3|grade4|grade5)$"]["access"!="private"](${bbox});
 );
 out center qt 80;
 `.trim();
@@ -238,6 +246,7 @@ export async function fetchTrailPreviews(
   way["highway"="path"]["name"]["access"!="private"](${bbox});
   way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
   way["highway"~"^(track|bridleway)$"]["sac_scale"]["access"!="private"](${bbox});
+  way["highway"="track"]["tracktype"~"^(grade3|grade4|grade5)$"]["access"!="private"](${bbox});
 );
 out center qt 200;
 `.trim();
@@ -294,6 +303,7 @@ async function _fetchTrailTile(
   way["highway"="footway"]["name"]["footway"!="sidewalk"]["footway"!="crossing"]["access"!="private"](${bbox});
   way["highway"="path"]["sac_scale"]["access"!="private"](${bbox});
   way["highway"~"^(track|bridleway)$"]["name"]["access"!="private"](${bbox});
+  way["highway"="track"]["tracktype"~"^(grade3|grade4|grade5)$"]["access"!="private"](${bbox});
 );
 out geom qt 80;
 `.trim();
