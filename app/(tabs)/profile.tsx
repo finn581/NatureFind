@@ -21,6 +21,7 @@ import { useRouter } from "expo-router";
 import { Colors } from "@/constants/Colors";
 import { useAuth } from "@/context/AuthContext";
 import { useSubscription } from "@/context/SubscriptionContext";
+import { OfflineMapsManager } from "@/components/OfflineMapsManager";
 import {
   deleteAccount,
   countFavorites,
@@ -256,6 +257,9 @@ export default function ProfileTab() {
             <Ionicons name="chevron-forward" size={16} color="#aaa" />
           </Pressable>
         </View>
+
+        {/* Offline Maps */}
+        <OfflineMapsManager />
 
         {/* Actions */}
         <View style={styles.section}>
