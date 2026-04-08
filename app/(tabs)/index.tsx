@@ -78,6 +78,10 @@ import {
 } from "@/services/mapboxRoutingApi";
 import { getPreloadedParks, OUTDOOR_DESIGNATIONS } from "@/services/preloadService";
 import MapboxGL from "@rnmapbox/maps";
+import { detectRegion, formatDistance, formatElevation } from "@/services/regionDetection";
+import type { AppRegion } from "@/constants/Regions";
+import { getPreloadedSAParks, type SAPark } from "@/services/wdpaApi";
+import { CURATED_SA_PARKS } from "@/constants/SouthAmericaParks";
 
 // ─── Mapbox init ─────────────────────────────────────────────────────────────
 
@@ -304,6 +308,9 @@ export default function MapTab() {
   const [selectedPoi, setSelectedPoi] = useState<OutdoorPoi | null>(null);
   const [show3D, setShow3D] = useState(false);
   const [useSatellite, setUseSatellite] = useState(false);
+  const [currentRegion, setCurrentRegion] = useState<AppRegion>("us");
+  const [saParks, setSAParks] = useState<SAPark[]>([]);
+  const [selectedSAPark, setSelectedSAPark] = useState<any>(null);
   // Auto-enable pro features when subscription activates, disable when it lapses
   useEffect(() => {
     if (isPro) {
@@ -339,6 +346,19 @@ export default function MapTab() {
   useEffect(() => {
     syncPendingDrafts().catch(() => {});
   }, []);
+
+  // ── Load SA parks when region changes to South America ──────────────────
+
+  useEffect(() => {
+    if (currentRegion !== "sa") {
+      setSAParks([]);
+      return;
+    }
+    const preloaded = getPreloadedSAParks();
+    if (preloaded && preloaded.length > 0) {
+      setSAParks(preloaded);
+    }
+  }, [currentRegion]);
 
   // ── Load parks immediately on mount ──────────────────────────────────────
 
@@ -666,7 +686,7 @@ export default function MapTab() {
         })
         .catch(() => {});
     }
-    if (!(selectedCampground.id in ridbCache)) {
+    if (currentRegion === "us" && !(selectedCampground.id in ridbCache)) {
       fetchRidbEnrichment(
         selectedCampground.name,
         selectedCampground.latitude,
@@ -1002,6 +1022,25 @@ export default function MapTab() {
     }),
   }), [visibleParks, driveTimes, parkMarkerColor]);
 
+  const saParksGeoJSON = useMemo(() => ({
+    type: "FeatureCollection" as const,
+    features: saParks.map((p, idx) => ({
+      type: "Feature" as const,
+      id: idx + 10000,
+      geometry: {
+        type: "Point" as const,
+        coordinates: [p.longitude, p.latitude],
+      },
+      properties: {
+        id: p.id,
+        name: p.name,
+        country: p.country,
+        designation: p.designation,
+        areaKm2: p.areaKm2,
+      },
+    })),
+  }), [saParks]);
+
   const campgroundsGeoJSON = useMemo<GeoJSONFC>(() => ({
     type: "FeatureCollection",
     features: visibleCampgrounds.map((c, idx) => ({
@@ -1199,6 +1238,8 @@ export default function MapTab() {
             latitudeDelta: Math.max(north - south, 0.001),
             longitudeDelta: Math.max(east - west, 0.001),
           });
+          const detected = detectRegion(lat, lon);
+          setCurrentRegion(detected);
         }}
       >
         <MapboxGL.Camera
@@ -1406,6 +1447,36 @@ export default function MapTab() {
         {showParks && visibleParks.length > 0 && (
           <MapboxGL.ShapeSource id="parks-src" shape={parksGeoJSON} onPress={handleParkPress}>
             <MapboxGL.SymbolLayer id="park-label" style={{ iconImage: "marker-park", iconSize: 0.25, iconAllowOverlap: true, textAllowOverlap: true, textField: ["get", "name"], textSize: 11, textOffset: [0, 2.0], textColor: "#fff", textHaloColor: "rgba(0,0,0,0.7)", textHaloWidth: 1.5, textMaxWidth: 8, textFont: ["DIN Pro Medium"] }} />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* ── South America park pins ── */}
+        {currentRegion === "sa" && saParks.length > 0 && (
+          <MapboxGL.ShapeSource
+            id="sa-parks-src"
+            shape={saParksGeoJSON}
+            onPress={(e: any) => {
+              const feature = e.features?.[0];
+              if (!feature) return;
+              const props = feature.properties;
+              if (gateFeature("Explore South America")) return;
+              setSelectedSAPark(props);
+            }}
+          >
+            <MapboxGL.SymbolLayer
+              id="sa-park-label"
+              style={{
+                iconImage: "marker-park",
+                iconSize: 0.25,
+                iconAllowOverlap: true,
+                textField: ["get", "name"],
+                textSize: 11,
+                textOffset: [0, 2.0],
+                textColor: "#fff",
+                textHaloColor: "rgba(0,0,0,0.7)",
+                textHaloWidth: 1.5,
+              }}
+            />
           </MapboxGL.ShapeSource>
         )}
 
