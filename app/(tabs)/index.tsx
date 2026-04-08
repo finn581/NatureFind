@@ -82,6 +82,7 @@ import { detectRegion, formatDistance, formatElevation } from "@/services/region
 import type { AppRegion } from "@/constants/Regions";
 import { getPreloadedSAParks, type SAPark } from "@/services/wdpaApi";
 import { CURATED_SA_PARKS } from "@/constants/SouthAmericaParks";
+import { DestinationsSection } from "@/components/DestinationsSection";
 
 // ─── Mapbox init ─────────────────────────────────────────────────────────────
 
@@ -1156,6 +1157,16 @@ export default function MapTab() {
     if (poi) setSelectedPoi(poi);
   }, [outdoorPois]);
 
+  // ── Fly to SA destination ────────────────────────────────────────────────
+
+  const handleDestinationPress = (lat: number, lng: number) => {
+    cameraRef.current?.setCamera({
+      centerCoordinate: [lng, lat],
+      zoomLevel: 7,
+      animationDuration: 2000,
+    });
+  };
+
   // ── List panel animation ──────────────────────────────────────────────────
 
   function toggleList() {
@@ -1847,6 +1858,11 @@ export default function MapTab() {
             </View>
           ))}
         </View>
+      )}
+
+      {/* ── SA Destinations Carousel ── */}
+      {currentRegion === "us" && (
+        <DestinationsSection onDestinationPress={handleDestinationPress} />
       )}
 
       {/* ── Report sighting FAB ── */}
