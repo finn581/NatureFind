@@ -11,7 +11,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { SubscriptionProvider } from "@/context/SubscriptionContext";
 import Paywall from "@/components/Paywall";
 import { Colors } from "@/constants/Colors";
-import { preloadParks } from "@/services/preloadService";
+import { preloadParks, preloadSAParks } from "@/services/preloadService";
 import { trackSession } from "@/utils/reviewPrompt";
 
 export { ErrorBoundary } from "expo-router";
@@ -54,6 +54,7 @@ export default function RootLayout() {
     if (!loaded) return;
     // Prime park data cache ASAP — map tab reads synchronously on mount
     preloadParks();
+    preloadSAParks();
     // Track session for review prompt
     trackSession();
     // Check onboarding before hiding splash

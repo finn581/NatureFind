@@ -8,6 +8,8 @@
  */
 
 import { fetchParks, type Park } from "./npsApi";
+import { fetchSAParks, setSAParksCache } from "./wdpaApi";
+import { FALLBACK_SA_PARKS } from "@/constants/SouthAmericaParks";
 
 export const OUTDOOR_DESIGNATIONS = new Set([
   "National Park",
@@ -55,6 +57,24 @@ export function preloadParks(): void {
       );
     } catch {
       // Non-fatal — map tab will retry via its own loadParks()
+    }
+  })();
+}
+
+let _saPromise: Promise<void> | null = null;
+
+export function preloadSAParks(): void {
+  if (_saPromise) return;
+  _saPromise = (async () => {
+    try {
+      const parks = await fetchSAParks();
+      if (parks.length > 0) {
+        setSAParksCache(parks);
+      } else {
+        setSAParksCache(FALLBACK_SA_PARKS);
+      }
+    } catch {
+      setSAParksCache(FALLBACK_SA_PARKS);
     }
   })();
 }
