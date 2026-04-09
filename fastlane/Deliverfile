@@ -1,6 +1,4 @@
 app_identifier "com.finn581.parkfinder"
-username "finnegantom65@gmail.com"
-app 6759922299
 
 screenshots_path "./screenshots"
 overwrite_screenshots true

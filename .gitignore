@@ -34,6 +34,12 @@ yarn-error.*
 .env
 .env*.local
 
+# sensitive configs
+firebaseConfig.ts
+firestore.rules
+storage.rules
+GoogleService-Info.plist
+
 
 # typescript
 *.tsbuildinfo
