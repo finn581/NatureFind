@@ -26,11 +26,7 @@
   },
   "submit": {
     "production": {
-      "ios": {
-        "appleId": "finnegantom65@gmail.com",
-        "ascAppId": "6759922299",
-        "appleTeamId": "G869G7YN83"
-      }
+      "ios": {}
     }
   }
 }
